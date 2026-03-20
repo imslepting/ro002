@@ -1,0 +1,48 @@
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# ── 模型權重（太大，用 download_weights.sh 下載）──
+external/
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.onnx
+
+# ── 標定輸出（硬體專屬，每台機器不同）──
+phase0_hw_diagnostics/outputs/
+phase1_intrinsics/outputs/raw_images/
+phase1_intrinsics/outputs/reports/
+phase2_extrinsics/outputs/raw_pairs/
+phase2_extrinsics/outputs/reports/
+phase3_stereo_depth/outputs/
+
+# ── VLM Agent 運行輸出 ──
+phase5_vlm_planning/outputs/sessions/
+phase5_vlm_planning/outputs/scene_snapshots/
+phase5_vlm_planning/outputs/logs/
+phase5_vlm_planning/outputs/plans/
+
+# ── 保留標定結果 JSON（git track，方便團隊共享）──
+!phase1_intrinsics/outputs/intrinsics.json
+!phase2_extrinsics/outputs/extrinsics.json
+
+# ── 系統 / IDE ──
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ── 臨時文件 ──
+/tmp/
+*.tmp
+*.log

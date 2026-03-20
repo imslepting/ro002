@@ -1,0 +1,93 @@
+# RO002 全局配置
+
+cameras:
+  cam0: { index: 0, role: stereo_left }
+  cam1: { index: 1, role: stereo_right }
+  cam2: { index: 2, role: aux }
+  cam3: { index: 3, role: aux }
+
+phase0:
+  scan_max_index: 16          # 掃描相機設備最大索引
+  test_frames: 30             # 每台相機測試幀數
+  tile_size: [640, 480]       # GUI 中每個相機畫面的尺寸
+  sharpness_threshold: 50.0   # Laplacian 方差低於此值警告
+  brightness_range: [30, 230] # 平均亮度超出此範圍警告
+
+calibration:
+  charuco:
+    cols: 9
+    rows: 6
+    square_size: 0.03         # 公尺，實量值
+    marker_size: 0.0223      # 公尺，實量值
+    aruco_dict: DICT_4X4_50
+  acceptance:
+    max_rms_intrinsics: 1.0   # px
+    max_rms_extrinsics: 1.0   # px
+    max_ba_residual: 0.5      # px
+    max_pointcloud_error: 0.005  # 公尺
+
+stereo_depth:                       # Phase 3
+  model: "Fast-FoundationStereo"
+  model_dir: "external/Fast-FoundationStereo/weights/23-36-37/model_best_bp2_serialize.pth"
+  max_disparity: 256
+  valid_iters: 8          # 4=快 8=精確
+  scale: 1.0              # 1.0=維持原分辨率
+  pad_multiple: 32
+  min_depth: 0.05         # 公尺
+  max_depth: 10.0         # 公尺
+
+multi_view_recon:                   # Phase 4
+  da3_model: "depth-anything/DA3NESTED-GIANT-LARGE"
+  export_format: "ply"
+
+vlm:
+  provider: "claude_code"               # "openai" | "claude_code"
+  openai_model: "gpt-4o"              # OpenAI model name
+  claude_model: "claude-sonnet-4-20250514"  # Claude Code model (for claude_code provider)
+  max_tokens: 4096
+
+skill_sam3:
+  checkpoint: "external/sam3/weights/sam3.pt"  # 本地權重路徑（相對於項目根目錄）
+  score_threshold: 0.3          # 過濾低置信度 mask
+  max_masks: 5                  # 最多保留幾個 mask
+  overlay_alpha: 0.4            # 標注疊加透明度
+
+skill_capture_point:
+  algorithm: "graspgen"
+  # gripper_config 指向 GraspGenModels 權重倉庫中的 YAML
+  # 該 YAML 內含 diffusion + discriminator checkpoint 路徑
+  gripper_config: "external/GraspGen/models/checkpoints/graspgen_robotiq_2f_140.yml"
+  num_grasps: 50                 # diffusion 生成候選數（越少越快，50=快速，200=精確）
+  num_candidates: 10              # 保留前 N 個候選
+  filter_collisions: true         # 碰撞過濾（需場景點雲）
+  gripper_width: 0.136            # 公尺，夾爪最大張開寬度（robotiq_2f_140）
+  pre_grasp_distance: 0.10        # 公尺，pre-grasp 沿 approach 反方向後退距離
+  table_height: "auto"            # "auto"=從物體點雲估計桌面, 或固定數值(公尺,arm座標z)
+  approach_direction: [0, 1, 0]   # 目標 approach 方向（arm 座標系），[0,1,0]=從上到下(+Y=綠軸正方向)
+  approach_threshold: 0.9         # 內積閾值 (0~1)，0.9≈僅允許偏離約25°，嚴格限制從上往下抓取
+  workspace_limits:               # 公尺，arm 座標系
+    x: [-0.5, 0.5]
+    y: [-0.5, 0.5]
+    z: [0.0, 2.0]
+
+skill_trajectory_planning:
+  algorithm: "curobo"
+  robot_config: "config/robot_curobo.yml"
+  collision_from_pointcloud: true
+  voxel_size: 0.02
+  interpolation_steps: 100
+
+arm:
+  sdk: "xarm"
+  ip: "192.168.1.xxx"
+  base_frame: "world"
+  # T_cam2arm：arm base 在相機正下方 10cm，方向相同（R=I）
+  # cam frame: x=右, y=下, z=前（深度）
+  # arm frame: 同 cam frame（暫定），arm 原點在 cam 下方 10cm
+  # P_arm = P_cam + [0, -0.1, 0]
+  # 實際部署時用 hand-eye calibration 結果替換
+  T_cam2arm:
+    - [1.0, 0.0, 0.0,  0.0]
+    - [0.0, 1.0, 0.0, -0.1]
+    - [0.0, 0.0, 1.0,  0.0]
+    - [0.0, 0.0, 0.0,  1.0]

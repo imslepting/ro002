@@ -1,0 +1,13 @@
+# xArm7 for cuRobo — references built-in assets
+robot_config_name: "xarm7.yml"    # cuRobo built-in config name
+
+joint_names:
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - joint7
+
+default_joint_state: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

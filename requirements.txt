@@ -1,0 +1,31 @@
+# RO002 Python 依賴
+# 安裝方式：conda run -n ro002 pip install -r requirements.txt
+#
+# 注意：torch/torchvision 需根據 CUDA 版本手動安裝
+# 參考：https://pytorch.org/get-started/locally/
+# 當前測試環境：torch 2.10.0+cu128, Python 3.11
+
+# ── 基礎 ──
+numpy>=2.0
+opencv-python>=4.10
+opencv-contrib-python>=4.10
+PyYAML>=6.0
+Pillow>=10.0
+scipy>=1.12
+
+# ── 深度學習（需已安裝 PyTorch）──
+# torch>=2.4        # 手動安裝，匹配 CUDA 版本
+# torchvision>=0.19  # 隨 torch 一起安裝
+einops>=0.8
+timm>=1.0
+omegaconf>=2.3
+
+# ── VLM / LLM ──
+openai>=1.0               # Send (LLM) 模式需要（gpt-4o-mini 提取）
+
+# ── 3D 可視化（可選）──
+open3d>=0.18              # View 3D 按鈕需要
+
+# ── GraspGen 額外依賴 ──
+torch-geometric>=2.5
+# torch_scatter, torch_cluster 需匹配 torch+CUDA 版本手動安裝
