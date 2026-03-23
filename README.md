@@ -15,11 +15,37 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 # 3. 安裝依賴
 pip install -r requirements.txt
 
-# 4. 下載模型權重
+# 4. 安裝本地外部套件（Phase 5 必需）
+pip install -e external/sam3
+pip install -e external/GraspGen --no-deps
+pip install pycocotools
+
+# 5. 下載模型權重
 bash external/download_weights.sh
 
-# 5. 啟動主 GUI
+# 6. 啟動主 GUI
 conda run -n ro002 python phase5_vlm_planning/test_vlm_agent.py
+```
+
+### Phase 5 常見環境錯誤
+
+若啟動後看到以下訊息：
+
+- `No module named 'sam3'`
+- `No module named 'grasp_gen'`
+
+請確認你已在 `ro002` 安裝本地套件：
+
+```bash
+conda run -n ro002 python -m pip install -e external/sam3
+conda run -n ro002 python -m pip install -e external/GraspGen --no-deps
+conda run -n ro002 python -m pip install pycocotools
+```
+
+快速驗證：
+
+```bash
+conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 ```
 
 ## Phases

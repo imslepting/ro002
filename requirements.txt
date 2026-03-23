@@ -29,3 +29,4 @@ open3d>=0.18              # View 3D 按鈕需要
 # ── GraspGen 額外依賴 ──
 torch-geometric>=2.5
 # torch_scatter, torch_cluster 需匹配 torch+CUDA 版本手動安裝
+imageio>=2.30  

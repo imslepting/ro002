@@ -790,9 +790,18 @@ class CaptureScreen(tk.Frame):
         Q = rectifier.Q
 
         vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name="Live 3D Point Cloud", width=1024, height=768)
+        ok = vis.create_window(window_name="Live 3D Point Cloud", width=1024, height=768)
+        if not ok:
+            print("[Warning] Open3D create_window failed in live 3D viewer")
+            self._view3d_running = False
+            return
 
         opt = vis.get_render_option()
+        if opt is None:
+            print("[Warning] Open3D render options unavailable (get_render_option() returned None)")
+            vis.destroy_window()
+            self._view3d_running = False
+            return
         opt.point_size = 2.0
         opt.background_color = np.array([0.1, 0.1, 0.1])
 
@@ -831,8 +840,9 @@ class CaptureScreen(tk.Frame):
             if not geometry_added:
                 vis.add_geometry(pcd)
                 ctr = vis.get_view_control()
-                ctr.set_front([0, 0, -1])
-                ctr.set_up([0, -1, 0])
+                if ctr is not None:
+                    ctr.set_front([0, 0, -1])
+                    ctr.set_up([0, -1, 0])
                 geometry_added = True
             else:
                 vis.update_geometry(pcd)
@@ -1125,14 +1135,23 @@ class ResultScreen(tk.Frame):
         self.update_idletasks()
 
         vis = o3d.visualization.Visualizer()
-        vis.create_window(window_name="Point Cloud Viewer", width=1024, height=768)
+        ok = vis.create_window(window_name="Point Cloud Viewer", width=1024, height=768)
+        if not ok:
+            self._save_status.configure(text="Open3D window init failed", fg=ACCENT_RED)
+            return
         vis.add_geometry(pcd)
         opt = vis.get_render_option()
+        if opt is None:
+            print("[Warning] Open3D render options unavailable (get_render_option() returned None)")
+            vis.destroy_window()
+            self._save_status.configure(text="Open3D render init failed", fg=ACCENT_RED)
+            return
         opt.point_size = 2.0
         opt.background_color = np.array([0.1, 0.1, 0.1])
         ctr = vis.get_view_control()
-        ctr.set_front([0, 0, -1])
-        ctr.set_up([0, -1, 0])
+        if ctr is not None:
+            ctr.set_front([0, 0, -1])
+            ctr.set_up([0, -1, 0])
         vis.run()
         vis.destroy_window()
 
