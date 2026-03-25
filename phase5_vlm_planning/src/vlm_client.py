@@ -78,13 +78,34 @@ class OpenAIVLM(VLMClient):
     """OpenAI GPT-4o 實現 — 原生 tool-use 支持"""
 
     def __init__(self, model: str = "gpt-4o", max_tokens: int = 4096,
-                 api_key: str | None = None):
+                 api_key: str | None = None,
+                 azure_endpoint: str | None = None,
+                 azure_deployment: str | None = None,
+                 api_version: str | None = None):
         import openai
         self._model = model
         self._max_tokens = max_tokens
-        self._client = openai.OpenAI(
-            api_key=api_key or os.environ.get("OPENAI_API_KEY"),
-        )
+        
+        # Azure OpenAI 配置
+        api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        azure_endpoint = azure_endpoint or os.environ.get("AZURE_OPENAI_ENDPOINT")
+        azure_deployment = azure_deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+        api_version = api_version or os.environ.get("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+        
+        if azure_endpoint and azure_deployment:
+            # 使用 Azure OpenAI
+            log.info(f"使用 Azure OpenAI: {azure_endpoint}")
+            self._client = openai.AzureOpenAI(
+                api_key=api_key,
+                api_version=api_version,
+                azure_endpoint=azure_endpoint,
+            )
+            self._model = azure_deployment  # Azure 使用部署名稱而非模型名稱
+        else:
+            # 使用標準 OpenAI
+            self._client = openai.OpenAI(
+                api_key=api_key,
+            )
 
     def create(self, messages: list[dict], system: str,
                tools: list[dict] | None = None,

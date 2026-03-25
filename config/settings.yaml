@@ -45,6 +45,13 @@ vlm:
   openai_model: "gpt-4o"              # OpenAI model name
   claude_model: "claude-sonnet-4-20250514"  # Claude Code model (for claude_code provider)
   max_tokens: 4096
+  # Azure OpenAI 配置（如果使用 Azure Portal API）
+  # provider: "openai" 時使用以下設定
+  azure_openai:
+    enabled: false                      # 改為 true 以啟用 Azure OpenAI
+    endpoint: null                      # 例: "https://your-resource.openai.azure.com/"
+    deployment: null                    # 例: "gpt-4o"（Azure 部署名稱）
+    api_version: "2024-12-01-preview"  # Azure API 版本
 
 skill_sam3:
   checkpoint: "external/sam3/weights/sam3.pt"  # 本地權重路徑（相對於項目根目錄）

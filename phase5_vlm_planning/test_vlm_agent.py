@@ -682,8 +682,29 @@ class VLMAgentGUI:
     def _create_vlm_client(self):
         from phase5_vlm_planning.src.vlm_client import create_vlm
         provider = self._provider_var.get()
+        
         if provider == "openai":
-            return create_vlm("openai", model=self._vlm_openai_model)
+            # 檢查是否使用 Azure OpenAI
+            vlm_cfg = self._settings.get("vlm", {})
+            azure_cfg = vlm_cfg.get("azure_openai", {})
+            
+            if azure_cfg.get("enabled", False):
+                # 使用 Azure OpenAI
+                endpoint = azure_cfg.get("endpoint") or os.environ.get("AZURE_OPENAI_ENDPOINT")
+                deployment = azure_cfg.get("deployment") or os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+                api_version = azure_cfg.get("api_version", "2024-12-01-preview")
+                
+                if not endpoint or not deployment:
+                    raise ValueError("Azure OpenAI requires AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_DEPLOYMENT")
+                
+                return create_vlm("openai", 
+                                model=self._vlm_openai_model,
+                                azure_endpoint=endpoint,
+                                azure_deployment=deployment,
+                                api_version=api_version)
+            else:
+                # 使用標準 OpenAI
+                return create_vlm("openai", model=self._vlm_openai_model)
         elif provider == "claude_code":
             return create_vlm("claude_code", model=self._vlm_claude_model)
         else:

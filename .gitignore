@@ -46,3 +46,6 @@ Thumbs.db
 /tmp/
 *.tmp
 *.log
+
+# ── 環境變數文件（包含敏感資訊）──
+run.sh
