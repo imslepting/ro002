@@ -351,7 +351,8 @@ LOADING ──→ IDLE ──→ LIVE ──→ AGENT_RUNNING ──→ PLAN_REA
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ ARM-VLM Agent    │ Status: ...              │  FPS: 12.3    │
+│ ARM-VLM Agent  
+  │ Status: ...              │  FPS: 12.3    │
 ├──────────────────┬──────────────────────────────────────────┤
 │ ┌──────┐┌──────┐ │  Agent Conversation                      │
 │ │ RGB  ││Depth │ │  ─────────────────────                    │
@@ -365,7 +366,8 @@ LOADING ──→ IDLE ──→ LIVE ──→ AGENT_RUNNING ──→ PLAN_REA
 │ [Start][Stop]    │                                           │
 │ T_cam2arm: cfg   │  Result Summary                           │
 │ Cam: cam0        │  Score: 0.927  Width: 136mm               │
-│ Provider: claude │  Pos(arm): [0.359, -0.220, 0.789]         │
+│ Provider: claud
+e │  Pos(arm): [0.359, -0.220, 0.789]         │
 │ [Load Agent]     │  [Save Plan] [View 3D]                    │
 ├──────────────────┴──────────────────────────────────────────┤
 │ Task: [________________________] [Run(Direct)] [Send(VLM)] [Send(LLM)] │

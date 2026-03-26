@@ -57,6 +57,7 @@ conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 | 2 | 外參標定 | `python phase2_extrinsics/main_extrinsics.py` |
 | 3 | 雙目深度 | `python phase3_stereo_depth/main_stereo_depth.py` |
 | 5 | **VLM Agent** | `python phase5_vlm_planning/test_vlm_agent.py` |
+| 7 | **Eye-to-Hand** | `python phase7_eye_to_hand/main_eye_to_hand.py` |
 
 ## Phase 5 — 三種模式
 

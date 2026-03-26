@@ -1,9 +1,9 @@
 # RO002 全局配置
 
 cameras:
-  cam0: { index: 0, role: stereo_left }
-  cam1: { index: 1, role: stereo_right }
-  cam2: { index: 2, role: aux }
+  cam0: { index: 2  , role: stereo_left }
+  cam1: { index: 8, role: stereo_right }
+  cam2: { index: 1, role: aux }
   cam3: { index: 3, role: aux }
 
 phase0:
@@ -83,6 +83,26 @@ skill_trajectory_planning:
   collision_from_pointcloud: true
   voxel_size: 0.02
   interpolation_steps: 100
+
+phase7_eye_to_hand:
+  camera_name: "cam0"               # eye-to-hand: fixed external camera
+  robot_pose_csv: "phase7_eye_to_hand/outputs/samples/robot_poses.csv"
+  csv_delimiter: ","
+  csv_has_header: false
+  pose_columns:                      # each row: X,Y,Z,Rx,Ry,Rz[,status]
+    x: 0
+    y: 1
+    z: 2
+    rx: 3
+    ry: 4
+    rz: 5
+  position_unit_scale: 0.001         # mm -> m
+  euler_order: "xyz"                # adjust to your robot manual if needed
+  min_charuco_corners: 6
+  min_samples: 15
+  hand_eye_method: "tsai"           # tsai|park|horaud|andreff|daniilidis
+  camera_warmup_sec: 1.0
+  target_offset_gripper_m: [0.0, 0.0, 0.0]  # board origin offset in gripper frame
 
 arm:
   sdk: "xarm"
