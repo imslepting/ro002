@@ -15,6 +15,10 @@ external/
 *.safetensors
 *.onnx
 
+# ── 大型二進制安裝程序 ──
+*.sh
+Miniconda*/
+
 # ── 標定輸出（硬體專屬，每台機器不同）──
 phase0_hw_diagnostics/outputs/
 phase1_intrinsics/outputs/raw_images/
