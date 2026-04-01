@@ -45,6 +45,20 @@ def _extract_robot_samples_by_pairs(robot_samples, pairs):
     return out
 
 
+def _convert_robot_samples_mm_to_m(robot_samples, unit_scale: float):
+    """Convert parsed robot translation from mm to m in main pipeline.
+
+    CSV is treated as mm input. The conversion is intentionally placed here
+    to keep unit handling explicit at the orchestration layer.
+    """
+    if unit_scale <= 0:
+        raise ValueError(f"position_unit_scale must be > 0, got {unit_scale}")
+
+    for s in robot_samples:
+        s.t_gripper2base = np.asarray(s.t_gripper2base, dtype=np.float64) * unit_scale
+    return robot_samples
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase7 Eye-to-Hand calibration")
     parser.add_argument("--mode", choices=["capture", "solve", "all"], default="all")
@@ -76,9 +90,12 @@ def main() -> None:
         delimiter=p7.get("csv_delimiter", ","),
         has_header=bool(p7.get("csv_has_header", False)),
         pose_columns=p7.get("pose_columns", {}),
-        unit_scale=float(p7.get("position_unit_scale", 0.001)),
+        # Keep CSV in mm; convert explicitly in main.
+        unit_scale=1.0,
         euler_order=p7.get("euler_order", "xyz"),
     )
+    unit_scale = float(p7.get("position_unit_scale", 0.001))
+    robot_samples = _convert_robot_samples_mm_to_m(robot_samples, unit_scale)
 
     calib = load_calib_result(camera_name, intrinsics_path)
     if calib is None:

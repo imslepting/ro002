@@ -1,8 +1,8 @@
 # RO002 全局配置
 
 cameras:
-  cam0: { index: 2  , role: stereo_left }
-  cam1: { index: 8, role: stereo_right }
+  cam0: { index: 4, role: stereo_left }
+  cam1: { index: 0, role: stereo_right }
   cam2: { index: 1, role: aux }
   cam3: { index: 3, role: aux }
 
@@ -17,8 +17,8 @@ calibration:
   charuco:
     cols: 9
     rows: 6
-    square_size: 0.03         # 公尺，實量值
-    marker_size: 0.0223      # 公尺，實量值
+    square_size: 0.02871        # 純黑色方塊邊長
+    marker_size: 0.02169        # 有記號的黑色方塊邊長
     aruco_dict: DICT_4X4_50
   acceptance:
     max_rms_intrinsics: 1.0   # px
