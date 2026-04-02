@@ -2,16 +2,27 @@
 
 Usage:
     conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py
+
+This version captures CharU'co poses and real-time robot states during the capture phase.
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 
 import numpy as np
 import yaml
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover
+    plt = None
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -27,9 +38,15 @@ from phase7_eye_to_hand.src.io_utils import (
     save_sample_pairs_jsonl,
     write_t_matrix_npy,
 )
-from phase7_eye_to_hand.src.robot_pose_parser import load_robot_pose_csv
-from phase7_eye_to_hand.src.sample_capture import capture_sample_pairs
 from phase7_eye_to_hand.src.validation import validate_translation_error
+from phase7_eye_to_hand.src.robot_pose_parser import RobotPoseSample
+from phase7_eye_to_hand.src.sample_capture import capture_sample_pairs
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
 
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
@@ -38,25 +55,144 @@ def load_config(config_path: str = "config/settings.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def _extract_robot_samples_by_pairs(robot_samples, pairs):
-    out = []
-    for p in pairs:
-        out.append(robot_samples[p.robot_row_index])
-    return out
-
-
-def _convert_robot_samples_mm_to_m(robot_samples, unit_scale: float):
-    """Convert parsed robot translation from mm to m in main pipeline.
-
-    CSV is treated as mm input. The conversion is intentionally placed here
-    to keep unit handling explicit at the orchestration layer.
-    """
-    if unit_scale <= 0:
-        raise ValueError(f"position_unit_scale must be > 0, got {unit_scale}")
-
-    for s in robot_samples:
-        s.t_gripper2base = np.asarray(s.t_gripper2base, dtype=np.float64) * unit_scale
+def _sample_pairs_to_robot_samples(pairs) -> list[RobotPoseSample]:
+    """Convert SamplePair objects with embedded robot state to RobotPoseSample."""
+    robot_samples = []
+    for pair in pairs:
+        if pair.R_gripper2base is None or pair.t_gripper2base is None:
+            raise ValueError(
+                f"Sample {pair.sample_index} missing robot state. "
+                "Ensure capture was done with real-time robot state fetching."
+            )
+        robot_samples.append(
+            RobotPoseSample(
+                index=pair.sample_index,
+                raw_row=[],  # No CSV row for real-time captures
+                t_gripper2base=pair.t_gripper2base.astype(np.float64),
+                R_gripper2base=pair.R_gripper2base.astype(np.float64),
+            )
+        )
     return robot_samples
+
+
+def _estimate_target_offset_gripper_m(
+    T_cam2base: np.ndarray,
+    robot_samples: list[RobotPoseSample],
+    pairs,
+) -> np.ndarray:
+    """Estimate constant target offset in gripper frame by least squares.
+
+    Model:
+      R_g2b * off + t_g2b ~= R_c2b * t_t2c + t_c2b
+    where `off` is target origin in gripper frame.
+    """
+    if len(robot_samples) != len(pairs):
+        raise ValueError("robot_samples and pairs must have same length for offset estimation")
+    if len(pairs) < 3:
+        raise ValueError("need at least 3 samples to estimate target offset")
+
+    A_blocks = []
+    b_blocks = []
+    for rs, pair in zip(robot_samples, pairs):
+        p_from_cam = T_cam2base[:3, :3] @ np.asarray(pair.t_target2cam, dtype=np.float64).reshape(3)
+        p_from_cam = p_from_cam + T_cam2base[:3, 3]
+        A_blocks.append(np.asarray(rs.R_gripper2base, dtype=np.float64))
+        b_blocks.append((p_from_cam - np.asarray(rs.t_gripper2base, dtype=np.float64).reshape(3)).reshape(3, 1))
+
+    A = np.vstack(A_blocks)
+    b = np.vstack(b_blocks)
+    off, *_ = np.linalg.lstsq(A, b, rcond=None)
+    return off.reshape(3).astype(np.float64)
+
+
+def _evaluate_method(
+    method: str,
+    robot_samples: list[RobotPoseSample],
+    pairs,
+    configured_offset: np.ndarray,
+) -> dict:
+    """Solve hand-eye and return method metrics for comparison."""
+    res = solve_eye_to_hand(
+        robot_samples=robot_samples,
+        sample_pairs=pairs,
+        method=method,
+    )
+
+    uncompensated_offset = np.zeros(3, dtype=np.float64)
+    val_stats_uncomp, errors_mm_uncomp = validate_translation_error(
+        T_cam2base=res.T_cam2base,
+        robot_samples=robot_samples,
+        pairs=pairs,
+        target_offset_gripper_m=uncompensated_offset,
+    )
+
+    target_offset = configured_offset
+    offset_source = "configured"
+    try:
+        target_offset = _estimate_target_offset_gripper_m(res.T_cam2base, robot_samples, pairs)
+        offset_source = "estimated_from_samples"
+    except Exception:
+        pass
+
+    val_stats_comp, errors_mm_comp = validate_translation_error(
+        T_cam2base=res.T_cam2base,
+        robot_samples=robot_samples,
+        pairs=pairs,
+        target_offset_gripper_m=target_offset,
+    )
+
+    improvement_mm = val_stats_uncomp.mean_mm - val_stats_comp.mean_mm
+    improvement_pct = (improvement_mm / val_stats_uncomp.mean_mm * 100.0) if val_stats_uncomp.mean_mm > 1e-9 else 0.0
+
+    return {
+        "method": method,
+        "res": res,
+        "target_offset": target_offset,
+        "offset_source": offset_source,
+        "val_stats_uncomp": val_stats_uncomp,
+        "errors_mm_uncomp": errors_mm_uncomp,
+        "val_stats_comp": val_stats_comp,
+        "errors_mm_comp": errors_mm_comp,
+        "improvement_mm": improvement_mm,
+        "improvement_pct": improvement_pct,
+    }
+
+
+def _save_error_scatter_plot(
+    errors_mm_uncomp: list[float],
+    errors_mm_comp: list[float],
+    out_path: str,
+) -> bool:
+    """Save scatter plot comparing uncompensated vs compensated errors."""
+    if plt is None:
+        logger.warning("matplotlib is not available; skip error scatter plot")
+        return False
+
+    if len(errors_mm_uncomp) == 0 or len(errors_mm_comp) == 0:
+        logger.warning("empty error list; skip error scatter plot")
+        return False
+
+    n = min(len(errors_mm_uncomp), len(errors_mm_comp))
+    x = np.arange(n)
+
+    try:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        fig, ax = plt.subplots(figsize=(10, 5), dpi=120)
+        ax.scatter(x, errors_mm_uncomp[:n], s=28, alpha=0.75, label="uncompensated")
+        ax.scatter(x, errors_mm_comp[:n], s=28, alpha=0.75, label="compensated")
+        ax.set_title("Phase7 Eye-to-Hand Error Scatter")
+        ax.set_xlabel("sample index")
+        ax.set_ylabel("error (mm)")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(out_path)
+        plt.close(fig)
+        logger.info("Saved error scatter plot: %s", out_path)
+        return True
+    except Exception as exc:
+        logger.warning("failed to save error scatter plot: %s", exc)
+        return False
 
 
 def main() -> None:
@@ -72,30 +208,13 @@ def main() -> None:
     camera_idx = cfg["cameras"][camera_name]["index"]
     intrinsics_path = os.path.join(_ROOT, "phase1_intrinsics", "outputs", "intrinsics.json")
 
-    csv_path = p7.get("robot_pose_csv", "")
-    if not csv_path:
-        raise ValueError("phase7_eye_to_hand.robot_pose_csv is required")
-    if not os.path.isabs(csv_path):
-        csv_path = os.path.join(_ROOT, csv_path)
-
     out_base = os.path.join(_ROOT, "phase7_eye_to_hand", "outputs")
     sample_jsonl = os.path.join(out_base, "samples", "sample_pairs.jsonl")
     sample_img_dir = os.path.join(out_base, "samples", "images")
     result_json = os.path.join(out_base, "eye_to_hand_result.json")
     result_npy = os.path.join(out_base, "T_cam2arm.npy")
     report_json = os.path.join(out_base, "reports", "validation_report.json")
-
-    robot_samples = load_robot_pose_csv(
-        csv_path=csv_path,
-        delimiter=p7.get("csv_delimiter", ","),
-        has_header=bool(p7.get("csv_has_header", False)),
-        pose_columns=p7.get("pose_columns", {}),
-        # Keep CSV in mm; convert explicitly in main.
-        unit_scale=1.0,
-        euler_order=p7.get("euler_order", "xyz"),
-    )
-    unit_scale = float(p7.get("position_unit_scale", 0.001))
-    robot_samples = _convert_robot_samples_mm_to_m(robot_samples, unit_scale)
+    report_plot_png = os.path.join(out_base, "reports", "validation_error_scatter.png")
 
     calib = load_calib_result(camera_name, intrinsics_path)
     if calib is None:
@@ -109,15 +228,16 @@ def main() -> None:
     )
 
     if args.mode in ("capture", "all"):
+        server_url = p7.get("robot_server_url", "http://140.118.117.61:5000/get_status")
         pairs = capture_sample_pairs(
             camera_index=camera_idx,
-            robot_row_count=len(robot_samples),
             estimator=estimator,
             out_dir=sample_img_dir,
             warmup_sec=float(p7.get("camera_warmup_sec", 1.0)),
+            server_url=server_url,
         )
         save_sample_pairs_jsonl(pairs, sample_jsonl)
-        print(f"[Phase7] captured pairs: {len(pairs)} -> {sample_jsonl}")
+        logger.info(f"Captured pairs: {len(pairs)} -> {sample_jsonl}")
 
         if args.mode == "capture":
             return
@@ -127,19 +247,62 @@ def main() -> None:
     if len(pairs) < min_samples:
         raise ValueError(f"need at least {min_samples} pairs, got {len(pairs)}")
 
-    paired_robot_samples = _extract_robot_samples_by_pairs(robot_samples, pairs)
-    res = solve_eye_to_hand(
-        robot_samples=paired_robot_samples,
-        sample_pairs=pairs,
-        method=p7.get("hand_eye_method", "tsai"),
-    )
+    # Convert sample pairs to robot samples
+    robot_samples = _sample_pairs_to_robot_samples(pairs)
+    configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
 
-    target_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
-    val_stats, errors_mm = validate_translation_error(
-        T_cam2base=res.T_cam2base,
-        robot_samples=paired_robot_samples,
-        pairs=pairs,
-        target_offset_gripper_m=target_offset,
+    candidate_methods = ["park", "daniilidis", "horaud"]
+    method_trials = []
+    best_eval = None
+
+    for method in candidate_methods:
+        try:
+            trial = _evaluate_method(method, robot_samples, pairs, configured_offset)
+            method_trials.append(
+                {
+                    "method": method,
+                    "success": True,
+                    "mean_mm_uncompensated": trial["val_stats_uncomp"].mean_mm,
+                    "mean_mm_compensated": trial["val_stats_comp"].mean_mm,
+                    "improvement_percent": trial["improvement_pct"],
+                }
+            )
+            logger.info(
+                "Method %s: mean error %.2f mm -> %.2f mm",
+                method,
+                trial["val_stats_uncomp"].mean_mm,
+                trial["val_stats_comp"].mean_mm,
+            )
+
+            if best_eval is None or trial["val_stats_comp"].mean_mm < best_eval["val_stats_comp"].mean_mm:
+                best_eval = trial
+        except Exception as exc:
+            method_trials.append({"method": method, "success": False, "error": str(exc)})
+            logger.warning("Method %s failed: %s", method, exc)
+
+    if best_eval is None:
+        raise RuntimeError("all candidate methods failed: park, daniilidis, horaud")
+
+    res = best_eval["res"]
+    target_offset = best_eval["target_offset"]
+    offset_source = best_eval["offset_source"]
+    val_stats_uncomp = best_eval["val_stats_uncomp"]
+    errors_mm_uncomp = best_eval["errors_mm_uncomp"]
+    val_stats_comp = best_eval["val_stats_comp"]
+    errors_mm_comp = best_eval["errors_mm_comp"]
+    improvement_mm = best_eval["improvement_mm"]
+    improvement_pct = best_eval["improvement_pct"]
+
+    logger.info(
+        "Selected best method: %s (compensated mean %.2f mm)",
+        res.method,
+        val_stats_comp.mean_mm,
+    )
+    logger.info(
+        "Estimated target_offset_gripper_m: %s (norm=%.1f mm, source=%s)",
+        np.round(target_offset, 6).tolist(),
+        float(np.linalg.norm(target_offset) * 1000.0),
+        offset_source,
     )
 
     payload = {
@@ -148,26 +311,59 @@ def main() -> None:
         "camera_index": camera_idx,
         "method": res.method,
         "num_pairs": len(pairs),
-        "euler_order": p7.get("euler_order", "xyz"),
-        "position_unit_scale": float(p7.get("position_unit_scale", 0.001)),
         "T_cam2arm": res.T_cam2base,
-        "validation": {
-            "mean_mm": val_stats.mean_mm,
-            "median_mm": val_stats.median_mm,
-            "p95_mm": val_stats.p95_mm,
-            "max_mm": val_stats.max_mm,
-            "count": val_stats.count,
+        "method_candidates": candidate_methods,
+        "method_trials": method_trials,
+        "selected_method": res.method,
+        "target_offset_gripper_m": target_offset,
+        "target_offset_gripper_m_config": configured_offset,
+        "offset_source": offset_source,
+        "validation_uncompensated": {
+            "mean_mm": val_stats_uncomp.mean_mm,
+            "median_mm": val_stats_uncomp.median_mm,
+            "p95_mm": val_stats_uncomp.p95_mm,
+            "max_mm": val_stats_uncomp.max_mm,
+            "count": val_stats_uncomp.count,
+        },
+        "validation_compensated": {
+            "mean_mm": val_stats_comp.mean_mm,
+            "median_mm": val_stats_comp.median_mm,
+            "p95_mm": val_stats_comp.p95_mm,
+            "max_mm": val_stats_comp.max_mm,
+            "count": val_stats_comp.count,
+        },
+        "validation_improvement": {
+            "mean_mm_delta": improvement_mm,
+            "mean_mm_delta_percent": improvement_pct,
         },
     }
 
+    plot_saved = _save_error_scatter_plot(errors_mm_uncomp, errors_mm_comp, report_plot_png)
+    if plot_saved:
+        payload["validation_scatter_plot"] = report_plot_png
+
     save_result_json(result_json, payload)
-    save_result_json(report_json, {"errors_mm": errors_mm, "summary": payload["validation"]})
+    save_result_json(
+        report_json,
+        {
+            "errors_mm_uncompensated": errors_mm_uncomp,
+            "summary_uncompensated": payload["validation_uncompensated"],
+            "errors_mm_compensated": errors_mm_comp,
+            "summary_compensated": payload["validation_compensated"],
+            "improvement": payload["validation_improvement"],
+        },
+    )
     write_t_matrix_npy(result_npy, res.T_cam2base)
 
-    print("[Phase7] done")
-    print(f"[Phase7] T_cam2arm: {result_json}")
-    print(f"[Phase7] matrix npy: {result_npy}")
-    print(f"[Phase7] mean error: {val_stats.mean_mm:.2f} mm")
+    logger.info("[Phase7] done")
+    logger.info(f"[Phase7] T_cam2arm: {result_json}")
+    logger.info(f"[Phase7] matrix npy: {result_npy}")
+    logger.info(
+        "[Phase7] mean error (uncompensated -> compensated): %.2f mm -> %.2f mm (improve %.2f%%)",
+        val_stats_uncomp.mean_mm,
+        val_stats_comp.mean_mm,
+        improvement_pct,
+    )
 
 
 if __name__ == "__main__":

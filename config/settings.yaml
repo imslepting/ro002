@@ -2,7 +2,7 @@
 
 cameras:
   cam0: { index: 4, role: stereo_left }
-  cam1: { index: 0, role: stereo_right }
+  cam1: { index: 2, role: stereo_right }
   cam2: { index: 1, role: aux }
   cam3: { index: 3, role: aux }
 
@@ -17,8 +17,8 @@ calibration:
   charuco:
     cols: 9
     rows: 6
-    square_size: 0.02871        # 純黑色方塊邊長
-    marker_size: 0.02169        # 有記號的黑色方塊邊長
+    square_size: 0.02871    # 純黑色方塊邊長
+    marker_size: 0.02169  # 有記號的黑色方塊邊長
     aruco_dict: DICT_4X4_50
   acceptance:
     max_rms_intrinsics: 1.0   # px
@@ -41,7 +41,7 @@ multi_view_recon:                   # Phase 4
   export_format: "ply"
 
 vlm:
-  provider: "claude_code"               # "openai" | "claude_code"
+  provider: "openai"                    # "openai" | "claude_code"
   openai_model: "gpt-4o"              # OpenAI model name
   claude_model: "claude-sonnet-4-20250514"  # Claude Code model (for claude_code provider)
   max_tokens: 4096
@@ -86,23 +86,12 @@ skill_trajectory_planning:
 
 phase7_eye_to_hand:
   camera_name: "cam0"               # eye-to-hand: fixed external camera
-  robot_pose_csv: "phase7_eye_to_hand/outputs/samples/robot_poses.csv"
-  csv_delimiter: ","
-  csv_has_header: false
-  pose_columns:                      # each row: X,Y,Z,Rx,Ry,Rz[,status]
-    x: 0
-    y: 1
-    z: 2
-    rx: 3
-    ry: 4
-    rz: 5
-  position_unit_scale: 0.001         # mm -> m
-  euler_order: "xyz"                # adjust to your robot manual if needed
+  robot_server_url: "http://140.118.117.61:5000/get_status"  # real-time robot state
   min_charuco_corners: 6
   min_samples: 15
   hand_eye_method: "tsai"           # tsai|park|horaud|andreff|daniilidis
   camera_warmup_sec: 1.0
-  target_offset_gripper_m: [0.0, 0.0, 0.0]  # board origin offset in gripper frame
+  target_offset_gripper_m: [-0.095807, 0.246983, -0.619049]  # board origin offset in gripper frame (meters)
 
 arm:
   sdk: "xarm"

@@ -1,0 +1,145 @@
+{
+  "timestamp": "2026-04-01T20:46:13",
+  "input_jsonl": "/home/laptop4080/project/RO002/phase7_eye_to_hand/outputs/samples/sample_pairs.jsonl",
+  "output_jsonl": "/home/laptop4080/project/RO002/phase7_eye_to_hand/outputs/samples/sample_pairs.clean.jsonl",
+  "total_samples": 54,
+  "kept_samples": 49,
+  "removed_samples": 5,
+  "filter_rules": {
+    "min_corners": 12,
+    "max_rot_jump_deg": 55.0,
+    "min_rot_jump_trans_m": 0.01,
+    "max_trans_jump_m": 0.15,
+    "min_trans_jump_rot_deg": 2.0
+  },
+  "removed_detail": [
+    {
+      "sample_index": 20,
+      "reasons": [
+        "trans_jump>0.15m_with_small_rot<2.0deg (0.1593m/0.00deg)"
+      ]
+    },
+    {
+      "sample_index": 32,
+      "reasons": [
+        "rot_jump>55.0deg_with_small_trans<0.01m (60.08deg/0.0000m)"
+      ]
+    },
+    {
+      "sample_index": 41,
+      "reasons": [
+        "low_corners<12 (7)"
+      ]
+    },
+    {
+      "sample_index": 43,
+      "reasons": [
+        "trans_jump>0.15m_with_small_rot<2.0deg (0.1624m/0.00deg)"
+      ]
+    },
+    {
+      "sample_index": 52,
+      "reasons": [
+        "rot_jump>55.0deg_with_small_trans<0.01m (66.18deg/0.0000m)"
+      ]
+    }
+  ],
+  "before": {
+    "selected_method": "horaud",
+    "offset_source": "estimated_from_samples",
+    "target_offset_gripper_m": [
+      -0.0345185761384501,
+      0.04522401842587574,
+      -0.2253200072623289
+    ],
+    "validation_uncompensated": {
+      "mean_mm": 269.43358286001177,
+      "median_mm": 264.62901175972013,
+      "p95_mm": 345.01444678437355,
+      "max_mm": 365.5995596041672,
+      "count": 54
+    },
+    "validation_compensated": {
+      "mean_mm": 137.63961506395356,
+      "median_mm": 134.96078410943016,
+      "p95_mm": 219.32630670607352,
+      "max_mm": 248.35650002342612,
+      "count": 54
+    },
+    "improvement": {
+      "mean_mm_delta": 131.7939677960582,
+      "mean_mm_delta_percent": 48.91519698364169
+    },
+    "method_trials": [
+      {
+        "method": "park",
+        "success": true,
+        "mean_mm_uncompensated": 1046.6443655231928,
+        "mean_mm_compensated": 422.68823282307153
+      },
+      {
+        "method": "daniilidis",
+        "success": true,
+        "mean_mm_uncompensated": 8438.57178700347,
+        "mean_mm_compensated": 2922.091287621174
+      },
+      {
+        "method": "horaud",
+        "success": true,
+        "mean_mm_uncompensated": 269.43358286001177,
+        "mean_mm_compensated": 137.63961506395356
+      }
+    ]
+  },
+  "after": {
+    "selected_method": "horaud",
+    "offset_source": "estimated_from_samples",
+    "target_offset_gripper_m": [
+      -0.017735676386065276,
+      0.04489259370526257,
+      -0.24120146158329336
+    ],
+    "validation_uncompensated": {
+      "mean_mm": 275.4050763069626,
+      "median_mm": 274.77803171827327,
+      "p95_mm": 347.2655377682912,
+      "max_mm": 361.81054183502425,
+      "count": 49
+    },
+    "validation_compensated": {
+      "mean_mm": 127.33428096063722,
+      "median_mm": 125.10657061698593,
+      "p95_mm": 188.12970956012896,
+      "max_mm": 207.04349598354824,
+      "count": 49
+    },
+    "improvement": {
+      "mean_mm_delta": 148.07079534632538,
+      "mean_mm_delta_percent": 53.7647298778501
+    },
+    "method_trials": [
+      {
+        "method": "park",
+        "success": true,
+        "mean_mm_uncompensated": 1072.8100365422938,
+        "mean_mm_compensated": 443.5912563186422
+      },
+      {
+        "method": "daniilidis",
+        "success": true,
+        "mean_mm_uncompensated": 9036.44072998489,
+        "mean_mm_compensated": 3204.7218365041776
+      },
+      {
+        "method": "horaud",
+        "success": true,
+        "mean_mm_uncompensated": 275.4050763069626,
+        "mean_mm_compensated": 127.33428096063722
+      }
+    ]
+  },
+  "comparison": {
+    "uncomp_mean_mm_delta_after_minus_before": 5.971493446950831,
+    "comp_mean_mm_delta_after_minus_before": -10.30533410331634
+  }
+}
