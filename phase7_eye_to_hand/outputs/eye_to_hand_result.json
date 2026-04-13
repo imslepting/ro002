@@ -1,27 +1,27 @@
 {
-  "timestamp": "2026-04-02T19:12:47",
+  "timestamp": "2026-04-13T14:19:06",
   "camera_name": "cam0",
   "camera_index": 4,
   "method": "horaud",
-  "num_pairs": 32,
+  "num_pairs": 35,
   "T_cam2arm": [
     [
-      -0.09619318596393833,
-      0.1892565008589402,
-      -0.9772046090030153,
-      0.6833930390072368
+      0.1920372550066919,
+      0.8785134443052117,
+      -0.43741950215381403,
+      0.6461401549492211
     ],
     [
-      0.9905280229305455,
-      -0.07844473828169896,
-      -0.11269719972217263,
-      -0.30834093020912406
+      -0.8312198089577204,
+      -0.09134789394647636,
+      -0.5483878111955416,
+      0.0771335027302184
     ],
     [
-      -0.09798523747693161,
-      -0.9787892520448642,
-      -0.17991801832513477,
-      0.8846088615685064
+      -0.5217234151212573,
+      0.4689026449557943,
+      0.7126955785380413,
+      0.18886590907383086
     ],
     [
       0.0,
@@ -39,30 +39,30 @@
     {
       "method": "park",
       "success": true,
-      "mean_mm_uncompensated": 1525.001615772038,
-      "mean_mm_compensated": 306.8847231797313,
-      "improvement_percent": 79.8764329161468
+      "mean_mm_uncompensated": 1410.085529919765,
+      "mean_mm_compensated": 450.0935367845661,
+      "improvement_percent": 68.08040879547379
     },
     {
       "method": "daniilidis",
       "success": true,
-      "mean_mm_uncompensated": 7874.555623545255,
-      "mean_mm_compensated": 1495.2609159342833,
-      "improvement_percent": 81.01148829956335
+      "mean_mm_uncompensated": 2699.5105509041496,
+      "mean_mm_compensated": 442.95688482697943,
+      "improvement_percent": 83.59121490824995
     },
     {
       "method": "horaud",
       "success": true,
-      "mean_mm_uncompensated": 439.15473698529456,
-      "mean_mm_compensated": 115.73393438719054,
-      "improvement_percent": 73.64620607722922
+      "mean_mm_uncompensated": 285.69965176441013,
+      "mean_mm_compensated": 232.1157836565383,
+      "improvement_percent": 18.755314462916274
     }
   ],
   "selected_method": "horaud",
   "target_offset_gripper_m": [
-    -0.16744527724167607,
-    0.18392146763050754,
-    -0.3451329159956724
+    0.016400172735966195,
+    0.151772831846893,
+    -0.02621681880984078
   ],
   "target_offset_gripper_m_config": [
     -0.095807,
@@ -71,22 +71,21 @@
   ],
   "offset_source": "estimated_from_samples",
   "validation_uncompensated": {
-    "mean_mm": 439.15473698529456,
-    "median_mm": 444.74492536224966,
-    "p95_mm": 526.4397135800185,
-    "max_mm": 539.6244376681886,
-    "count": 32
+    "mean_mm": 285.69965176441013,
+    "median_mm": 256.1716766047058,
+    "p95_mm": 468.85493337110876,
+    "max_mm": 488.7064472707614,
+    "count": 35
   },
   "validation_compensated": {
-    "mean_mm": 115.73393438719054,
-    "median_mm": 103.52219163797784,
-    "p95_mm": 214.75316212012277,
-    "max_mm": 219.97387857966342,
-    "count": 32
+    "mean_mm": 232.1157836565383,
+    "median_mm": 247.7409520726646,
+    "p95_mm": 421.54401916511796,
+    "max_mm": 504.5658140667479,
+    "count": 35
   },
   "validation_improvement": {
-    "mean_mm_delta": 323.42080259810405,
-    "mean_mm_delta_percent": 73.64620607722922
-  },
-  "validation_scatter_plot": "/home/laptop4080/project/RO002/phase7_eye_to_hand/outputs/reports/validation_error_scatter.png"
+    "mean_mm_delta": 53.58386810787184,
+    "mean_mm_delta_percent": 18.755314462916274
+  }
 }

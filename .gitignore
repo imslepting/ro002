@@ -54,3 +54,4 @@ Thumbs.db
 # ── 環境變數文件（包含敏感資訊）──
 run.sh
 *.jpg
+*.md

@@ -20,6 +20,12 @@ calibration:
     square_size: 0.02871    # 純黑色方塊邊長
     marker_size: 0.02169  # 有記號的黑色方塊邊長
     aruco_dict: DICT_4X4_50
+    # Origin definition for Charuco board:
+    # - "first_corner": first inner corner [0.02871, 0.02871, 0] (default)
+    # - "center": board geometric center
+    # - "custom": [x, y, z] in meters (specify in custom_origin below)
+    origin: "center"
+    custom_origin: null  # Set to [x, y, z] when origin="custom"
   acceptance:
     max_rms_intrinsics: 1.0   # px
     max_rms_extrinsics: 1.0   # px

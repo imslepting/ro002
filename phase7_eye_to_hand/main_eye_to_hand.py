@@ -1,9 +1,16 @@
 """Phase 7 - Eye-to-Hand calibration.
 
 Usage:
-    conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py
+    conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py --mode all
+    conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py --mode capture
+    conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py --mode analyze
+    conda run -n ro002 python phase7_eye_to_hand/main_eye_to_hand.py --mode solve
 
-This version captures CharU'co poses and real-time robot states during the capture phase.
+Modes:
+- capture: Capture images + robot state (no analysis)
+- analyze:  Analyze captured images (estimate Charuco pose)
+- solve:    Solve hand-eye calibration from analyzed samples
+- all:      Capture -> Analyze -> Solve (default)
 """
 
 from __future__ import annotations
@@ -16,14 +23,6 @@ import sys
 import numpy as np
 import yaml
 
-try:
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-except Exception:  # pragma: no cover
-    plt = None
-
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -33,6 +32,8 @@ from phase7_eye_to_hand.src.charuco_pose_estimator import CharucoPoseEstimator
 from phase7_eye_to_hand.src.handeye_solver import solve_eye_to_hand
 from phase7_eye_to_hand.src.io_utils import (
     load_sample_pairs_jsonl,
+    save_capture_records_jsonl,
+    load_capture_records_jsonl,
     now_iso,
     save_result_json,
     save_sample_pairs_jsonl,
@@ -40,7 +41,10 @@ from phase7_eye_to_hand.src.io_utils import (
 )
 from phase7_eye_to_hand.src.validation import validate_translation_error
 from phase7_eye_to_hand.src.robot_pose_parser import RobotPoseSample
-from phase7_eye_to_hand.src.sample_capture import capture_sample_pairs
+from phase7_eye_to_hand.src.sample_capture import (
+    capture_samples_only,
+    analyze_samples,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -158,46 +162,14 @@ def _evaluate_method(
     }
 
 
-def _save_error_scatter_plot(
-    errors_mm_uncomp: list[float],
-    errors_mm_comp: list[float],
-    out_path: str,
-) -> bool:
-    """Save scatter plot comparing uncompensated vs compensated errors."""
-    if plt is None:
-        logger.warning("matplotlib is not available; skip error scatter plot")
-        return False
-
-    if len(errors_mm_uncomp) == 0 or len(errors_mm_comp) == 0:
-        logger.warning("empty error list; skip error scatter plot")
-        return False
-
-    n = min(len(errors_mm_uncomp), len(errors_mm_comp))
-    x = np.arange(n)
-
-    try:
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=120)
-        ax.scatter(x, errors_mm_uncomp[:n], s=28, alpha=0.75, label="uncompensated")
-        ax.scatter(x, errors_mm_comp[:n], s=28, alpha=0.75, label="compensated")
-        ax.set_title("Phase7 Eye-to-Hand Error Scatter")
-        ax.set_xlabel("sample index")
-        ax.set_ylabel("error (mm)")
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(out_path)
-        plt.close(fig)
-        logger.info("Saved error scatter plot: %s", out_path)
-        return True
-    except Exception as exc:
-        logger.warning("failed to save error scatter plot: %s", exc)
-        return False
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase7 Eye-to-Hand calibration")
-    parser.add_argument("--mode", choices=["capture", "solve", "all"], default="all")
+    parser.add_argument(
+        "--mode",
+        choices=["capture", "analyze", "solve", "all"],
+        default="all",
+        help="capture: only capture images+robot state | analyze: analyze from captures | solve: solve from samples | all: full pipeline"
+    )
     parser.add_argument("--config", default="config/settings.yaml")
     args = parser.parse_args()
 
@@ -209,12 +181,13 @@ def main() -> None:
     intrinsics_path = os.path.join(_ROOT, "phase1_intrinsics", "outputs", "intrinsics.json")
 
     out_base = os.path.join(_ROOT, "phase7_eye_to_hand", "outputs")
+    captures_dir = os.path.join(out_base, "captures")
+    captures_jsonl = os.path.join(out_base, "captures.jsonl")
     sample_jsonl = os.path.join(out_base, "samples", "sample_pairs.jsonl")
     sample_img_dir = os.path.join(out_base, "samples", "images")
     result_json = os.path.join(out_base, "eye_to_hand_result.json")
     result_npy = os.path.join(out_base, "T_cam2arm.npy")
     report_json = os.path.join(out_base, "reports", "validation_report.json")
-    report_plot_png = os.path.join(out_base, "reports", "validation_error_scatter.png")
 
     calib = load_calib_result(camera_name, intrinsics_path)
     if calib is None:
@@ -227,143 +200,166 @@ def main() -> None:
         min_corners=int(p7.get("min_charuco_corners", 6)),
     )
 
+    # === CAPTURE PHASE ===
     if args.mode in ("capture", "all"):
+        logger.info("=" * 60)
+        logger.info("PHASE: CAPTURE (images + robot state only)")
+        logger.info("=" * 60)
         server_url = p7.get("robot_server_url", "http://140.118.117.61:5000/get_status")
-        pairs = capture_sample_pairs(
+        records = capture_samples_only(
             camera_index=camera_idx,
-            estimator=estimator,
-            out_dir=sample_img_dir,
+            out_dir=captures_dir,
             warmup_sec=float(p7.get("camera_warmup_sec", 1.0)),
             server_url=server_url,
         )
-        save_sample_pairs_jsonl(pairs, sample_jsonl)
-        logger.info(f"Captured pairs: {len(pairs)} -> {sample_jsonl}")
+        save_capture_records_jsonl(records, captures_jsonl)
+        logger.info(f"✓ Captured: {len(records)} records -> {captures_jsonl}\n")
 
         if args.mode == "capture":
             return
 
-    pairs = load_sample_pairs_jsonl(sample_jsonl)
-    min_samples = int(p7.get("min_samples", 15))
-    if len(pairs) < min_samples:
-        raise ValueError(f"need at least {min_samples} pairs, got {len(pairs)}")
+    # === ANALYZE PHASE ===
+    if args.mode in ("analyze", "all"):
+        logger.info("=" * 60)
+        logger.info("PHASE: ANALYZE (estimate Charuco poses from captures)")
+        logger.info("=" * 60)
+        if not os.path.exists(captures_jsonl):
+            raise ValueError(f"captures.jsonl not found: {captures_jsonl}\nRun with --mode capture first")
+        
+        pairs = analyze_samples(estimator=estimator, captures_path=captures_jsonl)
+        save_sample_pairs_jsonl(pairs, sample_jsonl)
+        logger.info(f"✓ Analyzed: {len(pairs)} pairs -> {sample_jsonl}\n")
 
-    # Convert sample pairs to robot samples
-    robot_samples = _sample_pairs_to_robot_samples(pairs)
-    configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
+        if args.mode == "analyze":
+            return
 
-    candidate_methods = ["park", "daniilidis", "horaud"]
-    method_trials = []
-    best_eval = None
+    # === SOLVE PHASE ===
+    if args.mode in ("solve", "all"):
+        logger.info("=" * 60)
+        logger.info("PHASE: SOLVE (hand-eye calibration)")
+        logger.info("=" * 60)
+        pairs = load_sample_pairs_jsonl(sample_jsonl)
+        min_samples = int(p7.get("min_samples", 15))
+        if len(pairs) < min_samples:
+            raise ValueError(f"need at least {min_samples} pairs, got {len(pairs)}")
 
-    for method in candidate_methods:
-        try:
-            trial = _evaluate_method(method, robot_samples, pairs, configured_offset)
-            method_trials.append(
-                {
-                    "method": method,
-                    "success": True,
-                    "mean_mm_uncompensated": trial["val_stats_uncomp"].mean_mm,
-                    "mean_mm_compensated": trial["val_stats_comp"].mean_mm,
-                    "improvement_percent": trial["improvement_pct"],
-                }
-            )
-            logger.info(
-                "Method %s: mean error %.2f mm -> %.2f mm",
-                method,
-                trial["val_stats_uncomp"].mean_mm,
-                trial["val_stats_comp"].mean_mm,
-            )
+        # Convert sample pairs to robot samples
+        robot_samples = _sample_pairs_to_robot_samples(pairs)
+        configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
 
-            if best_eval is None or trial["val_stats_comp"].mean_mm < best_eval["val_stats_comp"].mean_mm:
-                best_eval = trial
-        except Exception as exc:
-            method_trials.append({"method": method, "success": False, "error": str(exc)})
-            logger.warning("Method %s failed: %s", method, exc)
+        candidate_methods = ["park", "daniilidis", "horaud"]
+        method_trials = []
+        best_eval = None
 
-    if best_eval is None:
-        raise RuntimeError("all candidate methods failed: park, daniilidis, horaud")
+        for method in candidate_methods:
+            try:
+                trial = _evaluate_method(method, robot_samples, pairs, configured_offset)
+                method_trials.append(
+                    {
+                        "method": method,
+                        "success": True,
+                        "mean_mm_uncompensated": trial["val_stats_uncomp"].mean_mm,
+                        "mean_mm_compensated": trial["val_stats_comp"].mean_mm,
+                        "improvement_percent": trial["improvement_pct"],
+                    }
+                )
+                logger.info(
+                    "Method %s: mean error %.2f mm -> %.2f mm",
+                    method,
+                    trial["val_stats_uncomp"].mean_mm,
+                    trial["val_stats_comp"].mean_mm,
+                )
 
-    res = best_eval["res"]
-    target_offset = best_eval["target_offset"]
-    offset_source = best_eval["offset_source"]
-    val_stats_uncomp = best_eval["val_stats_uncomp"]
-    errors_mm_uncomp = best_eval["errors_mm_uncomp"]
-    val_stats_comp = best_eval["val_stats_comp"]
-    errors_mm_comp = best_eval["errors_mm_comp"]
-    improvement_mm = best_eval["improvement_mm"]
-    improvement_pct = best_eval["improvement_pct"]
+                if best_eval is None or trial["val_stats_comp"].mean_mm < best_eval["val_stats_comp"].mean_mm:
+                    best_eval = trial
+            except Exception as exc:
+                method_trials.append({"method": method, "success": False, "error": str(exc)})
+                logger.warning("Method %s failed: %s", method, exc)
 
-    logger.info(
-        "Selected best method: %s (compensated mean %.2f mm)",
-        res.method,
-        val_stats_comp.mean_mm,
-    )
-    logger.info(
-        "Estimated target_offset_gripper_m: %s (norm=%.1f mm, source=%s)",
-        np.round(target_offset, 6).tolist(),
-        float(np.linalg.norm(target_offset) * 1000.0),
-        offset_source,
-    )
+        if best_eval is None:
+            raise RuntimeError("all candidate methods failed: park, daniilidis, horaud")
 
-    payload = {
-        "timestamp": now_iso(),
-        "camera_name": camera_name,
-        "camera_index": camera_idx,
-        "method": res.method,
-        "num_pairs": len(pairs),
-        "T_cam2arm": res.T_cam2base,
-        "method_candidates": candidate_methods,
-        "method_trials": method_trials,
-        "selected_method": res.method,
-        "target_offset_gripper_m": target_offset,
-        "target_offset_gripper_m_config": configured_offset,
-        "offset_source": offset_source,
-        "validation_uncompensated": {
-            "mean_mm": val_stats_uncomp.mean_mm,
-            "median_mm": val_stats_uncomp.median_mm,
-            "p95_mm": val_stats_uncomp.p95_mm,
-            "max_mm": val_stats_uncomp.max_mm,
-            "count": val_stats_uncomp.count,
-        },
-        "validation_compensated": {
-            "mean_mm": val_stats_comp.mean_mm,
-            "median_mm": val_stats_comp.median_mm,
-            "p95_mm": val_stats_comp.p95_mm,
-            "max_mm": val_stats_comp.max_mm,
-            "count": val_stats_comp.count,
-        },
-        "validation_improvement": {
-            "mean_mm_delta": improvement_mm,
-            "mean_mm_delta_percent": improvement_pct,
-        },
-    }
+        res = best_eval["res"]
+        target_offset = best_eval["target_offset"]
+        offset_source = best_eval["offset_source"]
+        val_stats_uncomp = best_eval["val_stats_uncomp"]
+        errors_mm_uncomp = best_eval["errors_mm_uncomp"]
+        val_stats_comp = best_eval["val_stats_comp"]
+        errors_mm_comp = best_eval["errors_mm_comp"]
+        improvement_mm = best_eval["improvement_mm"]
+        improvement_pct = best_eval["improvement_pct"]
 
-    plot_saved = _save_error_scatter_plot(errors_mm_uncomp, errors_mm_comp, report_plot_png)
-    if plot_saved:
-        payload["validation_scatter_plot"] = report_plot_png
+        logger.info(
+            "Selected best method: %s (compensated mean %.2f mm)",
+            res.method,
+            val_stats_comp.mean_mm,
+        )
+        logger.info(
+            "Estimated target_offset_gripper_m: %s (norm=%.1f mm, source=%s)",
+            np.round(target_offset, 6).tolist(),
+            float(np.linalg.norm(target_offset) * 1000.0),
+            offset_source,
+        )
 
-    save_result_json(result_json, payload)
-    save_result_json(
-        report_json,
-        {
-            "errors_mm_uncompensated": errors_mm_uncomp,
-            "summary_uncompensated": payload["validation_uncompensated"],
-            "errors_mm_compensated": errors_mm_comp,
-            "summary_compensated": payload["validation_compensated"],
-            "improvement": payload["validation_improvement"],
-        },
-    )
-    write_t_matrix_npy(result_npy, res.T_cam2base)
+        payload = {
+            "timestamp": now_iso(),
+            "camera_name": camera_name,
+            "camera_index": camera_idx,
+            "method": res.method,
+            "num_pairs": len(pairs),
+            "T_cam2arm": res.T_cam2base,
+            "method_candidates": candidate_methods,
+            "method_trials": method_trials,
+            "selected_method": res.method,
+            "target_offset_gripper_m": target_offset,
+            "target_offset_gripper_m_config": configured_offset,
+            "offset_source": offset_source,
+            "validation_uncompensated": {
+                "mean_mm": val_stats_uncomp.mean_mm,
+                "median_mm": val_stats_uncomp.median_mm,
+                "p95_mm": val_stats_uncomp.p95_mm,
+                "max_mm": val_stats_uncomp.max_mm,
+                "count": val_stats_uncomp.count,
+            },
+            "validation_compensated": {
+                "mean_mm": val_stats_comp.mean_mm,
+                "median_mm": val_stats_comp.median_mm,
+                "p95_mm": val_stats_comp.p95_mm,
+                "max_mm": val_stats_comp.max_mm,
+                "count": val_stats_comp.count,
+            },
+            "validation_improvement": {
+                "mean_mm_delta": improvement_mm,
+                "mean_mm_delta_percent": improvement_pct,
+            },
+        }
 
-    logger.info("[Phase7] done")
-    logger.info(f"[Phase7] T_cam2arm: {result_json}")
-    logger.info(f"[Phase7] matrix npy: {result_npy}")
-    logger.info(
-        "[Phase7] mean error (uncompensated -> compensated): %.2f mm -> %.2f mm (improve %.2f%%)",
-        val_stats_uncomp.mean_mm,
-        val_stats_comp.mean_mm,
-        improvement_pct,
-    )
+        save_result_json(result_json, payload)
+        save_result_json(
+            report_json,
+            {
+                "errors_mm_uncompensated": errors_mm_uncomp,
+                "summary_uncompensated": payload["validation_uncompensated"],
+                "errors_mm_compensated": errors_mm_comp,
+                "summary_compensated": payload["validation_compensated"],
+                "improvement": payload["validation_improvement"],
+            },
+        )
+        write_t_matrix_npy(result_npy, res.T_cam2base)
+
+        logger.info("✓ SOLVE complete")
+        logger.info(f"  T_cam2arm: {result_json}")
+        logger.info(f"  matrix npy: {result_npy}")
+        logger.info(
+            "  mean error (uncompensated -> compensated): %.2f mm -> %.2f mm (improve %.2f%%)",
+            val_stats_uncomp.mean_mm,
+            val_stats_comp.mean_mm,
+            improvement_pct,
+        )
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Phase7 pipeline complete")
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,15 @@ import numpy as np
 
 
 @dataclass
+class CaptureRecord:
+    """Raw capture: image path + robot state (no Charuco analysis yet)."""
+    sample_index: int
+    image_path: str
+    R_gripper2base: np.ndarray  # (3,3)
+    t_gripper2base: np.ndarray  # (3,)
+
+
+@dataclass
 class SamplePair:
     sample_index: int
     robot_row_index: int
@@ -30,6 +39,41 @@ class NumpyEncoder(json.JSONEncoder):
 
 def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
+
+
+def save_capture_records_jsonl(records: list[CaptureRecord], out_path: str) -> None:
+    """Save raw capture records (image path + robot state, no Charuco analysis)."""
+    ensure_dir(os.path.dirname(out_path) or ".")
+    with open(out_path, "w", encoding="utf-8") as f:
+        for r in records:
+            row = {
+                "sample_index": r.sample_index,
+                "image_path": r.image_path,
+                "R_gripper2base": r.R_gripper2base,
+                "t_gripper2base": r.t_gripper2base,
+            }
+            f.write(json.dumps(row, ensure_ascii=False, cls=NumpyEncoder) + "\n")
+
+
+def load_capture_records_jsonl(path: str) -> list[CaptureRecord]:
+    """Load raw capture records."""
+    records: list[CaptureRecord] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            records.append(
+                CaptureRecord(
+                    sample_index=int(row["sample_index"]),
+                    image_path=str(row["image_path"]),
+                    R_gripper2base=np.asarray(row["R_gripper2base"], dtype=np.float64).reshape(3, 3),
+                    t_gripper2base=np.asarray(row["t_gripper2base"], dtype=np.float64).reshape(3),
+                )
+            )
+    return records
+
 
 
 def save_sample_pairs_jsonl(pairs: list[SamplePair], out_path: str) -> None:
