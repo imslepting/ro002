@@ -18,7 +18,7 @@ import numpy as np
 from phase7_eye_to_hand.src.robot_state_fetcher import RobotState
 from phase7_eye_to_hand.src.io_utils import SamplePair
 from phase7_eye_to_hand.src.robot_pose_parser import RobotPoseSample
-from phase7_eye_to_hand.main_eye_to_hand import _sample_pairs_to_robot_samples
+from phase7_eye_to_hand.main_eye_to_hand import _sample_pairs_to_robot_samples, _resolve_candidate_methods
 
 
 def test_robot_state():
@@ -100,6 +100,22 @@ def test_conversion():
     print("  ✓ Conversion to robot samples works correctly")
 
 
+def test_method_selection():
+    """Test hand-eye method selection from config."""
+    print("[Test 4] Hand-eye method selection...")
+
+    assert _resolve_candidate_methods("tsai") == ["tsai"]
+    assert _resolve_candidate_methods("auto") == ["tsai", "park", "horaud", "andreff", "daniilidis"]
+
+    try:
+        _resolve_candidate_methods("invalid")
+        raise AssertionError("Expected ValueError for invalid method")
+    except ValueError:
+        pass
+
+    print("  ✓ Method selection works correctly")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("Phase7 Eye-to-Hand Integration Tests")
@@ -109,6 +125,7 @@ if __name__ == "__main__":
         test_robot_state()
         test_sample_pair_with_robot_state()
         test_conversion()
+        test_method_selection()
         
         print("\n" + "="*60)
         print("✓ All integration tests passed!")

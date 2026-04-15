@@ -162,6 +162,19 @@ def _evaluate_method(
     }
 
 
+def _resolve_candidate_methods(method_cfg: str | None) -> list[str]:
+    supported = ["tsai", "park", "horaud", "andreff", "daniilidis"]
+    if method_cfg is None:
+        return ["tsai"]
+
+    method = str(method_cfg).strip().lower()
+    if method in ("auto", "all", "best"):
+        return supported
+    if method not in supported:
+        raise ValueError(f"unsupported hand_eye_method: {method_cfg}, supported={supported + ['auto']}")
+    return [method]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase7 Eye-to-Hand calibration")
     parser.add_argument(
@@ -247,7 +260,7 @@ def main() -> None:
         robot_samples = _sample_pairs_to_robot_samples(pairs)
         configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
 
-        candidate_methods = ["park", "daniilidis", "horaud"]
+        candidate_methods = _resolve_candidate_methods(p7.get("hand_eye_method"))
         method_trials = []
         best_eval = None
 
