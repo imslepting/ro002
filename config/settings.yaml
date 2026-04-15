@@ -1,8 +1,8 @@
 # RO002 全局配置
 
 cameras:
-  cam0: { index: 4, role: stereo_left }
-  cam1: { index: 2, role: stereo_right }
+  cam0: { index: 10, role: stereo_left }
+  cam1: { index: 8, role: stereo_right }
   cam2: { index: 1, role: aux }
   cam3: { index: 3, role: aux }
 
