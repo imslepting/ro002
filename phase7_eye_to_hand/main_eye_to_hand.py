@@ -52,6 +52,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
+SUPPORTED_HAND_EYE_METHODS = ["tsai", "park", "horaud", "andreff", "daniilidis"]
+
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
     path = os.path.join(_ROOT, config_path)
@@ -162,6 +164,26 @@ def _evaluate_method(
     }
 
 
+def _resolve_candidate_methods(method_cfg: str | None) -> list[str]:
+    """Resolve hand-eye method selection from config.
+
+    None defaults to "tsai" for deterministic single-method behavior.
+    Use auto/all/best to evaluate all supported methods and pick the best result.
+    """
+    if method_cfg is None:
+        return ["tsai"]
+
+    method = str(method_cfg).strip().lower()
+    if method in ("auto", "all", "best"):
+        return list(SUPPORTED_HAND_EYE_METHODS)
+    if method not in SUPPORTED_HAND_EYE_METHODS:
+        raise ValueError(
+            f"unsupported hand_eye_method: {method_cfg}, "
+            f"supported methods={SUPPORTED_HAND_EYE_METHODS}, multi_method_aliases=['auto', 'all', 'best']"
+        )
+    return [method]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase7 Eye-to-Hand calibration")
     parser.add_argument(
@@ -247,7 +269,7 @@ def main() -> None:
         robot_samples = _sample_pairs_to_robot_samples(pairs)
         configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
 
-        candidate_methods = ["park", "daniilidis", "horaud"]
+        candidate_methods = _resolve_candidate_methods(p7.get("hand_eye_method"))
         method_trials = []
         best_eval = None
 
