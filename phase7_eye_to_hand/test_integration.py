@@ -15,10 +15,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import pytest
 from phase7_eye_to_hand.src.robot_state_fetcher import RobotState
 from phase7_eye_to_hand.src.io_utils import SamplePair
 from phase7_eye_to_hand.src.robot_pose_parser import RobotPoseSample
-from phase7_eye_to_hand.main_eye_to_hand import _sample_pairs_to_robot_samples, _resolve_candidate_methods
+from phase7_eye_to_hand.main_eye_to_hand import (
+    SUPPORTED_HAND_EYE_METHODS,
+    _sample_pairs_to_robot_samples,
+    _resolve_candidate_methods,
+)
 
 
 def test_robot_state():
@@ -104,14 +109,16 @@ def test_method_selection():
     """Test hand-eye method selection from config."""
     print("[Test 4] Hand-eye method selection...")
 
+    assert SUPPORTED_HAND_EYE_METHODS
+    for method in ("tsai", "park", "horaud", "andreff", "daniilidis"):
+        assert method in SUPPORTED_HAND_EYE_METHODS
     assert _resolve_candidate_methods("tsai") == ["tsai"]
-    assert _resolve_candidate_methods("auto") == ["tsai", "park", "horaud", "andreff", "daniilidis"]
+    assert _resolve_candidate_methods("auto") == SUPPORTED_HAND_EYE_METHODS
+    assert _resolve_candidate_methods("all") == SUPPORTED_HAND_EYE_METHODS
+    assert _resolve_candidate_methods("best") == SUPPORTED_HAND_EYE_METHODS
 
-    try:
+    with pytest.raises(ValueError, match="multi_method_aliases"):
         _resolve_candidate_methods("invalid")
-        raise AssertionError("Expected ValueError for invalid method")
-    except ValueError:
-        pass
 
     print("  ✓ Method selection works correctly")
 

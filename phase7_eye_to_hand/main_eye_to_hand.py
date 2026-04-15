@@ -52,6 +52,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
+SUPPORTED_HAND_EYE_METHODS = ["tsai", "park", "horaud", "andreff", "daniilidis"]
+
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
     path = os.path.join(_ROOT, config_path)
@@ -163,15 +165,22 @@ def _evaluate_method(
 
 
 def _resolve_candidate_methods(method_cfg: str | None) -> list[str]:
-    supported = ["tsai", "park", "horaud", "andreff", "daniilidis"]
+    """Resolve hand-eye method selection from config.
+
+    None defaults to "tsai" for deterministic single-method behavior.
+    Use auto/all/best to evaluate all supported methods and pick the best result.
+    """
     if method_cfg is None:
         return ["tsai"]
 
     method = str(method_cfg).strip().lower()
     if method in ("auto", "all", "best"):
-        return supported
-    if method not in supported:
-        raise ValueError(f"unsupported hand_eye_method: {method_cfg}, supported={supported + ['auto']}")
+        return list(SUPPORTED_HAND_EYE_METHODS)
+    if method not in SUPPORTED_HAND_EYE_METHODS:
+        raise ValueError(
+            f"unsupported hand_eye_method: {method_cfg}, "
+            f"supported methods={SUPPORTED_HAND_EYE_METHODS}, multi_method_aliases=['auto', 'all', 'best']"
+        )
     return [method]
 
 
