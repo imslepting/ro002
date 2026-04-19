@@ -22,6 +22,7 @@ import sys
 
 import numpy as np
 import yaml
+from scipy.spatial.transform import Rotation
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -40,6 +41,7 @@ from phase7_eye_to_hand.src.io_utils import (
     write_t_matrix_npy,
 )
 from phase7_eye_to_hand.src.validation import validate_translation_error
+from phase7_eye_to_hand.src.validation import validate_target_in_gripper_consistency
 from phase7_eye_to_hand.src.robot_pose_parser import RobotPoseSample
 from phase7_eye_to_hand.src.sample_capture import (
     capture_samples_only,
@@ -52,6 +54,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 
+VALID_EULER_ORDERS = ("xyz", "xzy", "yxz", "yzx", "zxy", "zyx")
+
 
 def load_config(config_path: str = "config/settings.yaml") -> dict:
     path = os.path.join(_ROOT, config_path)
@@ -59,8 +63,16 @@ def load_config(config_path: str = "config/settings.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def _sample_pairs_to_robot_samples(pairs) -> list[RobotPoseSample]:
+def _normalize_euler_order(order: str) -> str:
+    normalized = str(order).lower()
+    if normalized not in VALID_EULER_ORDERS:
+        raise ValueError(f"invalid euler_order='{order}', expected one of {VALID_EULER_ORDERS}")
+    return normalized
+
+
+def _sample_pairs_to_robot_samples(pairs, euler_order: str | None = None) -> list[RobotPoseSample]:
     """Convert SamplePair objects with embedded robot state to RobotPoseSample."""
+    decoded_order = _normalize_euler_order(euler_order) if euler_order is not None else None
     robot_samples = []
     for pair in pairs:
         if pair.R_gripper2base is None or pair.t_gripper2base is None:
@@ -68,12 +80,21 @@ def _sample_pairs_to_robot_samples(pairs) -> list[RobotPoseSample]:
                 f"Sample {pair.sample_index} missing robot state. "
                 "Ensure capture was done with real-time robot state fetching."
             )
+
+        R_g2b = pair.R_gripper2base.astype(np.float64)
+        if decoded_order is not None and pair.robot_euler_deg is not None:
+            R_g2b = Rotation.from_euler(
+                decoded_order,
+                np.asarray(pair.robot_euler_deg, dtype=np.float64).reshape(3),
+                degrees=True,
+            ).as_matrix().astype(np.float64)
+
         robot_samples.append(
             RobotPoseSample(
                 index=pair.sample_index,
                 raw_row=[],  # No CSV row for real-time captures
                 t_gripper2base=pair.t_gripper2base.astype(np.float64),
-                R_gripper2base=pair.R_gripper2base.astype(np.float64),
+                R_gripper2base=R_g2b,
             )
         )
     return robot_samples
@@ -162,13 +183,52 @@ def _evaluate_method(
     }
 
 
+def _run_method_trials(
+    robot_samples: list[RobotPoseSample],
+    pairs,
+    configured_offset: np.ndarray,
+) -> tuple[dict, list[dict]]:
+    candidate_methods = ["park", "daniilidis", "horaud"]
+    method_trials = []
+    best_eval = None
+
+    for method in candidate_methods:
+        try:
+            trial = _evaluate_method(method, robot_samples, pairs, configured_offset)
+            method_trials.append(
+                {
+                    "method": method,
+                    "success": True,
+                    "mean_mm_uncompensated": trial["val_stats_uncomp"].mean_mm,
+                    "mean_mm_compensated": trial["val_stats_comp"].mean_mm,
+                    "improvement_percent": trial["improvement_pct"],
+                }
+            )
+            logger.info(
+                "Method %s: mean error %.2f mm -> %.2f mm",
+                method,
+                trial["val_stats_uncomp"].mean_mm,
+                trial["val_stats_comp"].mean_mm,
+            )
+
+            if best_eval is None or trial["val_stats_comp"].mean_mm < best_eval["val_stats_comp"].mean_mm:
+                best_eval = trial
+        except Exception as exc:
+            method_trials.append({"method": method, "success": False, "error": str(exc)})
+            logger.warning("Method %s failed: %s", method, exc)
+
+    if best_eval is None:
+        raise RuntimeError("all candidate methods failed: park, daniilidis, horaud")
+    return best_eval, method_trials
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase7 Eye-to-Hand calibration")
     parser.add_argument(
         "--mode",
-        choices=["capture", "analyze", "solve", "all"],
+        choices=["capture", "analyze", "solve", "search_euler", "all"],
         default="all",
-        help="capture: only capture images+robot state | analyze: analyze from captures | solve: solve from samples | all: full pipeline"
+        help="capture: capture only | analyze: estimate Charuco poses | solve: solve hand-eye | search_euler: compare all Euler orders | all: full pipeline"
     )
     parser.add_argument("--config", default="config/settings.yaml")
     args = parser.parse_args()
@@ -188,6 +248,9 @@ def main() -> None:
     result_json = os.path.join(out_base, "eye_to_hand_result.json")
     result_npy = os.path.join(out_base, "T_cam2arm.npy")
     report_json = os.path.join(out_base, "reports", "validation_report.json")
+    euler_report_json = os.path.join(out_base, "reports", "euler_order_comparison.json")
+
+    configured_euler_order = _normalize_euler_order(p7.get("euler_order", "xyz"))
 
     calib = load_calib_result(camera_name, intrinsics_path)
     if calib is None:
@@ -206,11 +269,13 @@ def main() -> None:
         logger.info("PHASE: CAPTURE (images + robot state only)")
         logger.info("=" * 60)
         server_url = p7.get("robot_server_url", "http://140.118.117.61:5000/get_status")
+        logger.info("Using Euler order for robot decode: %s", configured_euler_order)
         records = capture_samples_only(
             camera_index=camera_idx,
             out_dir=captures_dir,
             warmup_sec=float(p7.get("camera_warmup_sec", 1.0)),
             server_url=server_url,
+            euler_order=configured_euler_order,
         )
         save_capture_records_jsonl(records, captures_jsonl)
         logger.info(f"✓ Captured: {len(records)} records -> {captures_jsonl}\n")
@@ -233,6 +298,102 @@ def main() -> None:
         if args.mode == "analyze":
             return
 
+    # === SEARCH EULER PHASE ===
+    if args.mode == "search_euler":
+        logger.info("=" * 60)
+        logger.info("PHASE: SEARCH_EULER (compare Euler orders)")
+        logger.info("=" * 60)
+
+        if not os.path.exists(sample_jsonl):
+            raise ValueError(f"sample_pairs.jsonl not found: {sample_jsonl}\nRun with --mode analyze first")
+
+        pairs = load_sample_pairs_jsonl(sample_jsonl)
+        min_samples = int(p7.get("min_samples", 15))
+        if len(pairs) < min_samples:
+            raise ValueError(f"need at least {min_samples} pairs, got {len(pairs)}")
+
+        configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
+        comparisons = []
+        best_entry = None
+
+        for order in VALID_EULER_ORDERS:
+            logger.info("Testing Euler order: %s", order)
+            try:
+                robot_samples = _sample_pairs_to_robot_samples(pairs, euler_order=order)
+                best_eval, method_trials = _run_method_trials(robot_samples, pairs, configured_offset)
+                pose_stats = validate_target_in_gripper_consistency(
+                    T_cam2base=best_eval["res"].T_cam2base,
+                    robot_samples=robot_samples,
+                    pairs=pairs,
+                )
+
+                entry = {
+                    "euler_order": order,
+                    "success": True,
+                    "selected_method": best_eval["res"].method,
+                    "mean_mm_uncompensated": best_eval["val_stats_uncomp"].mean_mm,
+                    "mean_mm_compensated": best_eval["val_stats_comp"].mean_mm,
+                    "position_rmse_mm": pose_stats.position_rmse_mm,
+                    "orientation_rmse_deg": pose_stats.orientation_rmse_deg,
+                    "method_trials": method_trials,
+                }
+                comparisons.append(entry)
+
+                logger.info(
+                    "Order %s best=%s, position RMSE %.3f mm, orientation RMSE %.3f deg",
+                    order,
+                    entry["selected_method"],
+                    entry["position_rmse_mm"],
+                    entry["orientation_rmse_deg"],
+                )
+
+                if best_entry is None:
+                    best_entry = entry
+                else:
+                    a = (entry["position_rmse_mm"], entry["orientation_rmse_deg"])
+                    b = (best_entry["position_rmse_mm"], best_entry["orientation_rmse_deg"])
+                    if a < b:
+                        best_entry = entry
+            except Exception as exc:
+                comparisons.append({
+                    "euler_order": order,
+                    "success": False,
+                    "error": str(exc),
+                })
+                logger.warning("Order %s failed: %s", order, exc)
+
+        if best_entry is None:
+            raise RuntimeError("all Euler-order trials failed")
+
+        ranked = sorted(
+            [c for c in comparisons if c.get("success")],
+            key=lambda c: (c["position_rmse_mm"], c["orientation_rmse_deg"]),
+        )
+
+        save_result_json(
+            euler_report_json,
+            {
+                "timestamp": now_iso(),
+                "camera_name": camera_name,
+                "num_pairs": len(pairs),
+                "configured_euler_order": configured_euler_order,
+                "best_euler_order": best_entry["euler_order"],
+                "best_selected_method": best_entry["selected_method"],
+                "ranking": ranked,
+                "all_trials": comparisons,
+            },
+        )
+
+        logger.info("✓ SEARCH_EULER complete")
+        logger.info("  comparison report: %s", euler_report_json)
+        logger.info(
+            "  best order: %s (position RMSE %.3f mm, orientation RMSE %.3f deg)",
+            best_entry["euler_order"],
+            best_entry["position_rmse_mm"],
+            best_entry["orientation_rmse_deg"],
+        )
+        return
+
     # === SOLVE PHASE ===
     if args.mode in ("solve", "all"):
         logger.info("=" * 60)
@@ -244,40 +405,10 @@ def main() -> None:
             raise ValueError(f"need at least {min_samples} pairs, got {len(pairs)}")
 
         # Convert sample pairs to robot samples
-        robot_samples = _sample_pairs_to_robot_samples(pairs)
+        robot_samples = _sample_pairs_to_robot_samples(pairs, euler_order=configured_euler_order)
         configured_offset = np.asarray(p7.get("target_offset_gripper_m", [0.0, 0.0, 0.0]), dtype=np.float64)
-
+        best_eval, method_trials = _run_method_trials(robot_samples, pairs, configured_offset)
         candidate_methods = ["park", "daniilidis", "horaud"]
-        method_trials = []
-        best_eval = None
-
-        for method in candidate_methods:
-            try:
-                trial = _evaluate_method(method, robot_samples, pairs, configured_offset)
-                method_trials.append(
-                    {
-                        "method": method,
-                        "success": True,
-                        "mean_mm_uncompensated": trial["val_stats_uncomp"].mean_mm,
-                        "mean_mm_compensated": trial["val_stats_comp"].mean_mm,
-                        "improvement_percent": trial["improvement_pct"],
-                    }
-                )
-                logger.info(
-                    "Method %s: mean error %.2f mm -> %.2f mm",
-                    method,
-                    trial["val_stats_uncomp"].mean_mm,
-                    trial["val_stats_comp"].mean_mm,
-                )
-
-                if best_eval is None or trial["val_stats_comp"].mean_mm < best_eval["val_stats_comp"].mean_mm:
-                    best_eval = trial
-            except Exception as exc:
-                method_trials.append({"method": method, "success": False, "error": str(exc)})
-                logger.warning("Method %s failed: %s", method, exc)
-
-        if best_eval is None:
-            raise RuntimeError("all candidate methods failed: park, daniilidis, horaud")
 
         res = best_eval["res"]
         target_offset = best_eval["target_offset"]
@@ -305,6 +436,7 @@ def main() -> None:
             "timestamp": now_iso(),
             "camera_name": camera_name,
             "camera_index": camera_idx,
+            "euler_order": configured_euler_order,
             "method": res.method,
             "num_pairs": len(pairs),
             "T_cam2arm": res.T_cam2base,

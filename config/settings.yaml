@@ -93,6 +93,7 @@ skill_trajectory_planning:
 phase7_eye_to_hand:
   camera_name: "cam0"               # eye-to-hand: fixed external camera
   robot_server_url: "http://140.118.117.61:5000/get_status"  # real-time robot state
+  euler_order: "xyz"                # decode robot [rx, ry, rz]: xyz|xzy|yxz|yzx|zxy|zyx
   min_charuco_corners: 6
   min_samples: 15
   hand_eye_method: "tsai"           # tsai|park|horaud|andreff|daniilidis

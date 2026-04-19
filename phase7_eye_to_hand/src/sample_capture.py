@@ -21,6 +21,7 @@ def capture_samples_only(
     out_dir: str,
     warmup_sec: float = 1.0,
     server_url: str = "http://140.118.117.61:5000/get_status",
+    euler_order: str = "xyz",
 ) -> list[CaptureRecord]:
     """Interactive capture: only images + robot state (no Charuco analysis).
     
@@ -61,7 +62,7 @@ def capture_samples_only(
 
             if key == ord("c"):
                 # Fetch real-time robot state
-                robot_state = fetch_robot_state(server_url=server_url)
+                robot_state = fetch_robot_state(server_url=server_url, euler_order=euler_order)
                 if robot_state is None:
                     logger.warning(f"Failed to fetch robot state, skipping capture")
                     continue
@@ -74,6 +75,8 @@ def capture_samples_only(
                         image_path=img_path,
                         R_gripper2base=robot_state.R_gripper2base,
                         t_gripper2base=robot_state.t_gripper2base,
+                        robot_euler_deg=robot_state.euler_deg,
+                        euler_order_used=euler_order,
                     )
                 )
                 logger.info(f"Captured raw image {len(records)-1}: {img_path}")
@@ -157,6 +160,8 @@ def analyze_samples(
                 num_corners=est.num_corners,
                 R_gripper2base=record.R_gripper2base,
                 t_gripper2base=record.t_gripper2base,
+                robot_euler_deg=record.robot_euler_deg,
+                euler_order_used=record.euler_order_used,
             )
         )
         logger.info(f"Analyzed sample {len(pairs)-1}: {est.num_corners} corners")

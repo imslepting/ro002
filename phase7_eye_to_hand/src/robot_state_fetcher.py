@@ -27,6 +27,7 @@ class RobotState:
     """Current robot state."""
     t_gripper2base: np.ndarray  # (3,) in meters
     R_gripper2base: np.ndarray  # (3,3)
+    euler_deg: np.ndarray  # (3,) raw [rx, ry, rz] in degrees from robot
     gripper_state: int  # 0 or 1
     raw_joints: list[float]  # Raw joint values
 
@@ -34,6 +35,7 @@ class RobotState:
 def fetch_robot_state(
     server_url: str = "http://140.118.117.61:5000/get_status",
     timeout: float = 1.0,
+    euler_order: str = "xyz",
 ) -> RobotState | None:
     """
     Fetch robot state from remote server.
@@ -49,10 +51,15 @@ def fetch_robot_state(
     Args:
         server_url: URL of robot state endpoint
         timeout: Request timeout in seconds
+        euler_order: Euler axis order used to decode [rx, ry, rz]
     
     Returns:
         RobotState object (with positions in meters) if successful, None otherwise
     """
+    valid_orders = {"xyz", "xzy", "yxz", "yzx", "zxy", "zyx"}
+    if euler_order not in valid_orders:
+        raise ValueError(f"invalid euler_order='{euler_order}', expected one of {sorted(valid_orders)}")
+
     try:
         response = requests.get(server_url, timeout=timeout)
         data = response.json()
@@ -84,11 +91,13 @@ def fetch_robot_state(
                     return None
                 
                 # Create rotation from Euler angles (in degrees)
-                R = Rotation.from_euler('xyz', euler_angles, degrees=True).as_matrix()
+                euler_deg = np.asarray(euler_angles, dtype=np.float64).reshape(3)
+                R = Rotation.from_euler(euler_order, euler_deg, degrees=True).as_matrix()
                 
                 return RobotState(
                     t_gripper2base=t_gripper2base,
                     R_gripper2base=R.astype(np.float64),
+                    euler_deg=euler_deg,
                     gripper_state=grip_state,
                     raw_joints=raw_joints,
                 )
@@ -103,13 +112,15 @@ def fetch_robot_state(
                 t_gripper2base = np.array(state[:3], dtype=np.float64) / 1000.0
                 
                 # Create rotation from Euler angles (assuming degrees)
-                R = Rotation.from_euler('xyz', state[3:6], degrees=True).as_matrix()
+                euler_deg = np.asarray(state[3:6], dtype=np.float64).reshape(3)
+                R = Rotation.from_euler(euler_order, euler_deg, degrees=True).as_matrix()
                 
                 gripper_state = int(state[6])
                 
                 return RobotState(
                     t_gripper2base=t_gripper2base,
                     R_gripper2base=R.astype(np.float64),
+                    euler_deg=euler_deg,
                     gripper_state=gripper_state,
                     raw_joints=list(state),
                 )
