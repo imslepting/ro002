@@ -91,9 +91,9 @@ class CapturePointSkill:
         self._num_grasps = self._cfg.get("num_grasps", 200)
         self._filter_collisions = self._cfg.get("filter_collisions", True)
         self._workspace_limits = self._cfg.get("workspace_limits", {
-            "x": [-0.5, 0.5],
-            "y": [-0.5, 0.5],
-            "z": [0.0, 0.6],
+            "x": [-5, 5],
+            "y": [-5, 5],
+            "z": [-5, 5],
         })
         # 桌面高度過濾：自動從場景點雲估計，或用固定值
         # "auto" = 自動估計（場景點雲的下百分位），數值 = 固定高度

@@ -63,6 +63,73 @@ def load_config(config_path: str = "config/settings.yaml") -> dict:
         return yaml.safe_load(f)
 
 
+def _is_top_level_key_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    return (not line.startswith((" ", "\t"))) and stripped.endswith(":")
+
+
+def _write_t_cam2arm_to_config(config_path: str, T_cam2arm: np.ndarray) -> str:
+    """Replace only arm.T_cam2arm block in YAML config to preserve other comments/format."""
+    abs_path = os.path.join(_ROOT, config_path)
+    with open(abs_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    arm_idx = None
+    for i, line in enumerate(lines):
+        if line.strip() == "arm:":
+            arm_idx = i
+            break
+    if arm_idx is None:
+        raise ValueError(f"'arm:' section not found in config: {abs_path}")
+
+    arm_end = len(lines)
+    for i in range(arm_idx + 1, len(lines)):
+        if _is_top_level_key_line(lines[i]):
+            arm_end = i
+            break
+
+    t_idx = None
+    for i in range(arm_idx + 1, arm_end):
+        if lines[i].lstrip().startswith("T_cam2arm:"):
+            t_idx = i
+            break
+    if t_idx is None:
+        raise ValueError(f"'arm.T_cam2arm' not found in config: {abs_path}")
+
+    key_indent = len(lines[t_idx]) - len(lines[t_idx].lstrip(" "))
+    item_indent = key_indent + 2
+
+    block_start = t_idx + 1
+    block_end = block_start
+    while block_end < arm_end:
+        candidate = lines[block_end]
+        stripped = candidate.strip()
+        if not stripped:
+            block_end += 1
+            continue
+        if candidate.startswith(" " * item_indent) and candidate.lstrip().startswith("-"):
+            block_end += 1
+            continue
+        break
+
+    T = np.asarray(T_cam2arm, dtype=np.float64).reshape(4, 4)
+    new_block = []
+    for row in T:
+        a, b, c, d = [float(v) for v in row]
+        new_block.append(
+            f"{' ' * item_indent}- [{a:.16g}, {b:.16g}, {c:.16g}, {d:.16g}]\n"
+        )
+
+    lines[block_start:block_end] = new_block
+
+    with open(abs_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    return abs_path
+
+
 def _normalize_euler_order(order: str) -> str:
     normalized = str(order).lower()
     if normalized not in VALID_EULER_ORDERS:
@@ -478,10 +545,12 @@ def main() -> None:
             },
         )
         write_t_matrix_npy(result_npy, res.T_cam2base)
+        config_written_path = _write_t_cam2arm_to_config(args.config, res.T_cam2base)
 
         logger.info("✓ SOLVE complete")
         logger.info(f"  T_cam2arm: {result_json}")
         logger.info(f"  matrix npy: {result_npy}")
+        logger.info(f"  config updated: {config_written_path}")
         logger.info(
             "  mean error (uncompensated -> compensated): %.2f mm -> %.2f mm (improve %.2f%%)",
             val_stats_uncomp.mean_mm,

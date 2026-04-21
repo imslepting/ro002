@@ -1,134 +1,158 @@
-# RO002 全局配置
-
 cameras:
-  realsense: { index: 0, role: realsense }  # RealSense 
-  cam0: { index: 4, role: stereo_left }
-  cam1: { index: 2, role: stereo_right }
-  cam2: { index: 1, role: aux }
-  cam3: { index: 3, role: aux }
-
-
+  realsense:
+    index: 0
+    role: realsense
+  cam0:
+    index: 4
+    role: stereo_left
+  cam1:
+    index: 2
+    role: stereo_right
+  cam2:
+    index: 1
+    role: aux
+  cam3:
+    index: 3
+    role: aux
 phase0:
-  scan_max_index: 16          # 掃描相機設備最大索引
-  test_frames: 30             # 每台相機測試幀數
-  tile_size: [640, 480]       # GUI 中每個相機畫面的尺寸
-  sharpness_threshold: 50.0   # Laplacian 方差低於此值警告
-  brightness_range: [30, 230] # 平均亮度超出此範圍警告
-
+  scan_max_index: 16
+  test_frames: 30
+  tile_size:
+  - 640
+  - 480
+  sharpness_threshold: 50.0
+  brightness_range:
+  - 30
+  - 230
 calibration:
   charuco:
     cols: 9
     rows: 6
-    square_size: 0.02871    # 純黑色方塊邊長
-    marker_size: 0.02169  # 有記號的黑色方塊邊長
+    square_size: 0.02871
+    marker_size: 0.02169
     aruco_dict: DICT_4X4_50
-    # Origin definition for Charuco board:
-    # - "first_corner": first inner corner [0.02871, 0.02871, 0] (default)
-    # - "center": board geometric center
-    # - "custom": [x, y, z] in meters (specify in custom_origin below)
-    origin: "center"
-    custom_origin: null  # Set to [x, y, z] when origin="custom"
+    origin: center
+    custom_origin: null
   acceptance:
-    max_rms_intrinsics: 1.0   # px
-    max_rms_extrinsics: 1.0   # px
-    max_ba_residual: 0.5      # px
-    max_pointcloud_error: 0.005  # 公尺
-
-stereo_depth:                       # Phase 3
-  model: "Fast-FoundationStereo"
-  model_dir: "external/Fast-FoundationStereo/weights/23-36-37/model_best_bp2_serialize.pth"
+    max_rms_intrinsics: 1.0
+    max_rms_extrinsics: 1.0
+    max_ba_residual: 0.5
+    max_pointcloud_error: 0.005
+stereo_depth:
+  model: Fast-FoundationStereo
+  model_dir: external/Fast-FoundationStereo/weights/23-36-37/model_best_bp2_serialize.pth
   max_disparity: 256
-  valid_iters: 8          # 4=快 8=精確
-  scale: 1.0              # 1.0=維持原分辨率
+  valid_iters: 8
+  scale: 1.0
   pad_multiple: 32
-  min_depth: 0.05         # 公尺
-  max_depth: 10.0         # 公尺
-
-multi_view_recon:                   # Phase 4
-  da3_model: "depth-anything/DA3NESTED-GIANT-LARGE"
-  export_format: "ply"
-
-phase8_realsense:                   # Phase 8
+  min_depth: 0.05
+  max_depth: 10.0
+multi_view_recon:
+  da3_model: depth-anything/DA3NESTED-GIANT-LARGE
+  export_format: ply
+phase8_realsense:
   width: 640
   height: 480
   fps: 30
   warmup_frames: 20
-  min_depth: 0.15                  # meters
-  max_depth: 5                   # meters
-  cloud_stride: 2                  # larger = fewer points, faster rendering
-
+  min_depth: 0.15
+  max_depth: 5
+  cloud_stride: 2
+phase7_arm_icp:
+  mesh_dir: assets/ra605_710
+  init_txyz:
+  - 0.5
+  - 0.0
+  - 0.8
+  init_rxyz_deg:
+  - -90.0
+  - 0.0
+  - 90.0
+  crop_min: null
+  crop_max: null
+  voxel_size: 0.01
+  points_per_mesh: 8000
+  max_correspondence_distance: 0.04
+  max_iterations: 80
+  point_to_plane: true
+  auto_update_settings: true
+  preview: false
+  result_json: phase7_arm_icp/outputs/arm_icp_result.json
 vlm:
-  provider: "openai"                    # "openai" | "claude_code"
-  openai_model: "gpt-4o"              # OpenAI model name
-  claude_model: "claude-sonnet-4-20250514"  # Claude Code model (for claude_code provider)
+  provider: openai
+  openai_model: gpt-4o
+  claude_model: claude-sonnet-4-20250514
   max_tokens: 4096
-  # Azure OpenAI 配置（如果使用 Azure Portal API）
-  # provider: "openai" 時使用以下設定
   azure_openai:
-    enabled: false                      # 改為 true 以啟用 Azure OpenAI
-    endpoint: null                      # 例: "https://your-resource.openai.azure.com/"
-    deployment: null                    # 例: "gpt-4o"（Azure 部署名稱）
-    api_version: "2024-12-01-preview"  # Azure API 版本
-
+    enabled: false
+    endpoint: null
+    deployment: null
+    api_version: 2024-12-01-preview
 skill_sam3:
-  checkpoint: "external/sam3/weights/sam3.pt"  # 本地權重路徑（相對於項目根目錄）
-  score_threshold: 0.3          # 過濾低置信度 mask
-  max_masks: 5                  # 最多保留幾個 mask
-  overlay_alpha: 0.4            # 標注疊加透明度
-
+  checkpoint: external/sam3/weights/sam3.pt
+  score_threshold: 0.3
+  max_masks: 5
+  overlay_alpha: 0.4
 skill_capture_point:
-  algorithm: "graspgen"
-  # gripper_config 指向 GraspGenModels 權重倉庫中的 YAML
-  # 該 YAML 內含 diffusion + discriminator checkpoint 路徑
-  gripper_config: "external/GraspGen/models/checkpoints/graspgen_robotiq_2f_140.yml"
-  num_grasps: 50                 # diffusion 生成候選數（越少越快，50=快速，200=精確）
-  num_candidates: 10              # 保留前 N 個候選
-  filter_collisions: false          # 碰撞過濾（需場景點雲） TODO: 暫時關閉
-  gripper_width: 0.136            # 公尺，夾爪最大張開寬度（robotiq_2f_140）
-  pre_grasp_distance: 0.10        # 公尺，pre-grasp 沿 approach 反方向後退距離
-  table_height: "auto"            # "auto"=從物體點雲估計桌面, 或固定數值(公尺,arm座標z)
-  approach_direction: [0, 1, 0]   # 目標 approach 方向（arm 座標系），[0,1,0]=從上到下(+Y=綠軸正方向)
-  approach_threshold: 0.7         # 內積閾值 (0~1)，0.9≈僅允許偏離約25°，嚴格限制從上往下抓取 TODO: 先從0.9改0.7測試ㄋ
-  workspace_limits:               # 公尺，arm 座標系
-    x: [-1, 1]
-    y: [-2, 2]
-    z: [-1, 1.0]
-
+  algorithm: graspgen
+  gripper_config: external/GraspGen/models/checkpoints/graspgen_robotiq_2f_140.yml
+  num_grasps: 50
+  num_candidates: 10
+  filter_collisions: false
+  gripper_width: 0.136
+  pre_grasp_distance: 0.1
+  table_height: auto
+  approach_direction:
+  - 0
+  - 1
+  - 0
+  approach_threshold: 0.7
+  workspace_limits:
+    x:
+    - -1
+    - 1
+    y:
+    - -2
+    - 2
+    z:
+    - -1
+    - 1.0
 skill_trajectory_planning:
-  algorithm: "curobo"
-  robot_config: "config/robot_curobo.yml"
+  algorithm: curobo
+  robot_config: config/robot_curobo.yml
   collision_from_pointcloud: true
   voxel_size: 0.02
   interpolation_steps: 100
-
 phase7_eye_to_hand:
-  camera_name: "cam0"               # eye-to-hand: fixed external camera
-  robot_server_url: "http://140.118.117.61:5000/get_status"  # real-time robot state
-  euler_order: "xyz"                # decode robot [rx, ry, rz]: xyz|xzy|yxz|yzx|zxy|zyx
+  camera_name: cam0
+  robot_server_url: http://140.118.117.61:5000/get_status
+  euler_order: xyz
   min_charuco_corners: 6
   min_samples: 15
-  hand_eye_method: "tsai"           # tsai|park|horaud|andreff|daniilidis
+  hand_eye_method: tsai
   camera_warmup_sec: 1.0
-  target_offset_gripper_m: [-0.095807, 0.246983, -0.619049]  # board origin offset in gripper frame (meters)
-
+  target_offset_gripper_m:
+  - -0.095807
+  - 0.246983
+  - -0.619049
 arm:
-  sdk: "xarm"
-  ip: "192.168.1.xxx"
-  base_frame: "world"
-
+  sdk: xarm
+  ip: 192.168.1.xxx
+  base_frame: world
   T_cam2arm:
-    - [-0.08381973568169276, 0.1202934758313666, -0.9891934753033198, 0.5081075178473938]
-    - [0.920239214711111, -0.3714749069658617, -0.1231510503511122, -0.2650034496894799]
-    - [-0.382274822108557, -0.9206171153998348, -0.07956184521966697, 0.7567888313271008]
-    - [0, 0, 0, 1]
-  # T_cam2arm:
-  #   - [1 , 0 , 0 , 0]
-  #   - [0 , 1 , 0 , 0]
-  #   - [0 , 0 , 1 , 0]
-  #   - [0 , 0 , 0 , 1]
-
-  # T_cam2arm: #誤差6cm
-  #   - [0.2617048631320653, 0.3023774277316073, -0.9165579391459351, 1.283332825275526]
-  #   - [0.6878596608816239, 0.6077200342322241, 0.3968947554763123, -0.7681441032582484]
-  #   - [0.6770226373946771, -0.7343325208590459, -0.04894994651636286, 0.6887107077729612]
-  #   - [0, 0, 0, 1]
+  - - 6.123233995736766e-17
+    - 6.123233995736766e-17
+    - -1.0
+    - 0.8
+  - - -1.0
+    - 3.749399456654644e-33
+    - -6.123233995736766e-17
+    - 0.5
+  - - 0.0
+    - 1.0
+    - 6.123233995736766e-17
+    - -4.898587196589413e-17
+  - - 0.0
+    - 0.0
+    - 0.0
+    - 1.0

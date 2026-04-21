@@ -13,6 +13,7 @@ This module automatically converts to meters (m) for calibration.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,6 +37,7 @@ def fetch_robot_state(
     server_url: str = "http://140.118.117.61:5000/get_status",
     timeout: float = 1.0,
     euler_order: str = "xyz",
+    no_cache: bool = True,
 ) -> RobotState | None:
     """
     Fetch robot state from remote server.
@@ -52,6 +54,7 @@ def fetch_robot_state(
         server_url: URL of robot state endpoint
         timeout: Request timeout in seconds
         euler_order: Euler axis order used to decode [rx, ry, rz]
+        no_cache: Append timestamp query param to avoid stale HTTP cache responses
     
     Returns:
         RobotState object (with positions in meters) if successful, None otherwise
@@ -61,7 +64,10 @@ def fetch_robot_state(
         raise ValueError(f"invalid euler_order='{euler_order}', expected one of {sorted(valid_orders)}")
 
     try:
-        response = requests.get(server_url, timeout=timeout)
+        params = None
+        if no_cache:
+            params = {"_ts": str(time.time_ns())}
+        response = requests.get(server_url, params=params, timeout=timeout)
         data = response.json()
         logger.debug(f"Received robot state: {data}")
         
