@@ -185,12 +185,8 @@ class _OverlayCloudViewer:
         opt = vis.get_render_option()
         if opt is not None:
             opt.background_color = np.array([0.1, 0.1, 0.1])
-<<<<<<< HEAD
-            opt.point_size = 20.0
-            opt.line_width = 30.0
-=======
             opt.point_size = 2.0
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
+            opt.line_width = 5.0
 
         self._live_pcd = o3d.geometry.PointCloud()
 
@@ -313,13 +309,10 @@ class Phase7ArmIcpGUI:
         self._rx_var = tk.DoubleVar()
         self._ry_var = tk.DoubleVar()
         self._rz_var = tk.DoubleVar()
-<<<<<<< HEAD
         self._prev_tx = 0.0
         self._prev_ty = 0.0
         self._prev_tz = 0.0
         self._syncing_sliders = False
-=======
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
         self._photo_rgb = None
         self._photo_depth = None
@@ -334,7 +327,6 @@ class Phase7ArmIcpGUI:
 
         self._t_cam_to_arm = _safe_t_cam2arm(cfg)
         self._t_arm_to_cam = np.linalg.inv(self._t_cam_to_arm)
-<<<<<<< HEAD
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
         self._arm_model_points = self._load_arm_model_points()
         self.viewer.set_model_points(self._arm_model_points)
@@ -350,19 +342,6 @@ class Phase7ArmIcpGUI:
         self._prev_tx = self._tx_var.get()
         self._prev_ty = self._ty_var.get()
         self._prev_tz = self._tz_var.get()
-=======
-        self._arm_model_points = self._load_arm_model_points()
-        self.viewer.set_model_points(self._arm_model_points)
-
-        # Initialize slider values from current T_cam2arm
-        self._tx_var.set(float(self._t_cam_to_arm[0, 3]))
-        self._ty_var.set(float(self._t_cam_to_arm[1, 3]))
-        self._tz_var.set(float(self._t_cam_to_arm[2, 3]))
-        rx, ry, rz = _matrix_to_euler_xyz_deg(self._t_cam_to_arm)
-        self._rx_var.set(rx)
-        self._ry_var.set(ry)
-        self._rz_var.set(rz)
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
         self._build_ui()
 
@@ -458,23 +437,16 @@ class Phase7ArmIcpGUI:
         tk.Label(rot_frame, text="Rz", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
         tk.Scale(rot_frame, from_=-180.0, to=180.0, resolution=1.0, orient="horizontal", variable=self._rz_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
 
-<<<<<<< HEAD
         tk.Button(controls, text="Save", command=self._save_current_pose, bg="#2d7f2d", fg="#ffffff", font=("Helvetica", 11, "bold"), relief="raised", bd=2, padx=12, pady=6).pack(side="right", padx=(10, 0))
         tk.Button(controls, text="Apply Pose", command=self._commit_ctrl_pose, **BTN_ACCENT).pack(side="right", padx=(10, 0))
-=======
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
         tk.Button(controls, text="Reset to Settings", command=self._reset_to_settings, **BTN_ACCENT).pack(side="right", padx=(10, 0))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_slider_change(self, _event=None) -> None:
-<<<<<<< HEAD
         if self._syncing_sliders:
             return
 
-=======
-        """Update T_cam_to_arm from slider values and refresh viewer."""
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
         tx = self._tx_var.get()
         ty = self._ty_var.get()
         tz = self._tz_var.get()
@@ -482,7 +454,6 @@ class Phase7ArmIcpGUI:
         ry = self._ry_var.get()
         rz = self._rz_var.get()
 
-<<<<<<< HEAD
         # Build rotation matrix from slider Euler (degrees)
         r = euler_xyz_deg_to_matrix(rx, ry, rz)
 
@@ -522,19 +493,6 @@ class Phase7ArmIcpGUI:
             self._status.set("Pose applied and saved to settings")
         else:
             self._status.set("Pose applied")
-=======
-        # Update transformation matrix
-        r = euler_xyz_deg_to_matrix(rx, ry, rz)
-        t = np.eye(4, dtype=np.float64)
-        t[:3, :3] = r
-        t[:3, 3] = np.array([tx, ty, tz], dtype=np.float64)
-
-        self._t_cam_to_arm = t
-        self._t_arm_to_cam = np.linalg.inv(t)
-
-        # Update viewer with new transform
-        self.viewer.set_t_arm_to_cam(self._t_arm_to_cam)
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
     def _reset_to_settings(self) -> None:
         """Reset sliders to values from settings.yaml."""
@@ -547,7 +505,6 @@ class Phase7ArmIcpGUI:
             cfg = yaml.safe_load(f)
         
         t_cam_to_arm = _safe_t_cam2arm(cfg)
-<<<<<<< HEAD
         self._t_cam_to_arm = t_cam_to_arm
         self._t_arm_to_cam = np.linalg.inv(t_cam_to_arm)
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
@@ -566,20 +523,6 @@ class Phase7ArmIcpGUI:
         self._prev_ty = self._ty_var.get()
         self._prev_tz = self._tz_var.get()
         self.viewer.set_t_arm_to_cam(self._ctrl_t_arm_to_cam)
-=======
-
-        self._tx_var.set(float(t_cam_to_arm[0, 3]))
-        self._ty_var.set(float(t_cam_to_arm[1, 3]))
-        self._tz_var.set(float(t_cam_to_arm[2, 3]))
-        rx, ry, rz = _matrix_to_euler_xyz_deg(t_cam_to_arm)
-        self._rx_var.set(rx)
-        self._ry_var.set(ry)
-        self._rz_var.set(rz)
-
-        self._t_cam_to_arm = t_cam_to_arm
-        self._t_arm_to_cam = np.linalg.inv(t_cam_to_arm)
-        self.viewer.set_t_arm_to_cam(self._t_arm_to_cam)
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
     def start(self) -> None:
         if self._running:
@@ -682,11 +625,7 @@ class Phase7ArmIcpGUI:
             self._last_fallback = fallback_used
 
             if self._viewer_enabled and points.shape[0] > 0:
-<<<<<<< HEAD
                 self.viewer.update(points, colors, self._ctrl_t_arm_to_cam)
-=======
-                self.viewer.update(points, colors, self._t_arm_to_cam)
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
             frame_count += 1
             elapsed = time.time() - fps_t0
@@ -797,13 +736,8 @@ class Phase7ArmIcpGUI:
             colors = np.asarray(self._latest_colors, dtype=np.float64)
             cloud_path = _save_temp_cloud_npz(self.root_dir, points, colors)
 
-<<<<<<< HEAD
             init_rxyz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
             init_txyz = tuple(float(v) for v in self._ctrl_t_arm_to_cam[:3, 3])
-=======
-            init_rxyz = _matrix_to_euler_xyz_deg(self._t_arm_to_cam)
-            init_txyz = tuple(float(v) for v in self._t_arm_to_cam[:3, 3])
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
             result = calibrate_cam_to_arm(
                 mesh_dir=self._mesh_dir,
@@ -841,7 +775,6 @@ class Phase7ArmIcpGUI:
 
         self._t_cam_to_arm = np.asarray(result.t_cam_to_arm, dtype=np.float64)
         self._t_arm_to_cam = np.asarray(result.t_arm_to_cam, dtype=np.float64)
-<<<<<<< HEAD
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
 
         self._tx_var.set(float(self._ctrl_t_arm_to_cam[0, 3]))
@@ -854,11 +787,6 @@ class Phase7ArmIcpGUI:
 
         if self._viewer_enabled and self._latest_points is not None and self._latest_points.shape[0] > 0:
             self.viewer.update(self._latest_points, self._latest_colors, self._ctrl_t_arm_to_cam)
-=======
-
-        if self._viewer_enabled and self._latest_points is not None and self._latest_points.shape[0] > 0:
-            self.viewer.update(self._latest_points, self._latest_colors, self._t_arm_to_cam)
->>>>>>> e93f5c8bf53df2355df05c465428c6fae9f2e761
 
         self._icp_metrics.set(f"ICP: fitness={result.icp.fitness:.6f} | rmse={result.icp.inlier_rmse:.6f}")
 
