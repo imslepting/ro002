@@ -25,6 +25,7 @@ openai>=1.0               # Send (LLM) 模式需要（gpt-4o-mini 提取）
 
 # ── 3D 可視化（可選）──
 open3d>=0.18              # View 3D 按鈕需要
+pyrealsense2; platform_system == "Linux"  # Phase 8 RealSense RGB-D
 
 # ── GraspGen 額外依賴 ──
 torch-geometric>=2.5

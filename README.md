@@ -58,6 +58,7 @@ conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 | 3 | 雙目深度 | `python phase3_stereo_depth/main_stereo_depth.py` |
 | 5 | **VLM Agent** | `python phase5_vlm_planning/test_vlm_agent.py` |
 | 7 | **Eye-to-Hand** | `python phase7_eye_to_hand/main_eye_to_hand.py` |
+| 8 | **RealSense 即時點雲** | `python phase8_realsense_pointcloud/main_realsense_pointcloud.py` |
 
 ## Phase 5 — 三種模式
 
@@ -70,6 +71,17 @@ conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 ## Configuration
 
 所有配置集中在 `config/settings.yaml`，詳見 `doc/project_development_status.md`。
+
+## Phase 8 備註
+
+- 需要 RealSense SDK Python 綁定：`pyrealsense2`
+- 建議先確認相機可被系統偵測，再啟動：
+
+```bash
+conda run -n ro002 python phase8_realsense_pointcloud/main_realsense_pointcloud.py
+```
+
+- Phase 8 目前先獨立運行，不會改動 Phase 5 的 stereo 流程。
 
 ## External Dependencies
 
