@@ -16,6 +16,13 @@ from .robot_state_fetcher import fetch_robot_state
 logger = logging.getLogger(__name__)
 
 
+def _rotation_distance_deg(R_a: np.ndarray, R_b: np.ndarray) -> float:
+    R_rel = R_a.T @ R_b
+    cos_theta = (np.trace(R_rel) - 1.0) * 0.5
+    cos_theta = float(np.clip(cos_theta, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cos_theta)))
+
+
 def capture_samples_only(
     camera_index: int,
     out_dir: str,
@@ -41,6 +48,8 @@ def capture_samples_only(
 
     records: list[CaptureRecord] = []
     sample_count = 0
+    repeated_pose_count = 0
+    request_count = 0
 
     try:
         while True:
@@ -62,10 +71,57 @@ def capture_samples_only(
 
             if key == ord("c"):
                 # Fetch real-time robot state
-                robot_state = fetch_robot_state(server_url=server_url, euler_order=euler_order)
+                request_count += 1
+                logger.info(
+                    "[Capture %03d] Requesting robot state #%03d from %s",
+                    len(records),
+                    request_count,
+                    server_url,
+                )
+                robot_state = fetch_robot_state(
+                    server_url=server_url,
+                    euler_order=euler_order,
+                    no_cache=True,
+                )
                 if robot_state is None:
                     logger.warning(f"Failed to fetch robot state, skipping capture")
                     continue
+
+                logger.info(
+                    "[Capture %03d] Robot pose: t=[%.5f, %.5f, %.5f] m, euler=[%.2f, %.2f, %.2f] deg (%s)",
+                    len(records),
+                    float(robot_state.t_gripper2base[0]),
+                    float(robot_state.t_gripper2base[1]),
+                    float(robot_state.t_gripper2base[2]),
+                    float(robot_state.euler_deg[0]),
+                    float(robot_state.euler_deg[1]),
+                    float(robot_state.euler_deg[2]),
+                    euler_order,
+                )
+
+                if records:
+                    prev = records[-1]
+                    t_delta_mm = float(
+                        np.linalg.norm(robot_state.t_gripper2base - prev.t_gripper2base) * 1000.0
+                    )
+                    r_delta_deg = _rotation_distance_deg(prev.R_gripper2base, robot_state.R_gripper2base)
+                    if t_delta_mm < 1.0 and r_delta_deg < 1.0:
+                        repeated_pose_count += 1
+                        logger.warning(
+                            "Robot pose almost unchanged vs previous capture (dt=%.2f mm, dR=%.2f deg). "
+                            "Move robot before capturing.",
+                            t_delta_mm,
+                            r_delta_deg,
+                        )
+                    else:
+                        repeated_pose_count = 0
+
+                    if repeated_pose_count >= 3:
+                        logger.warning(
+                            "Detected %d near-identical captures in a row. "
+                            "Hand-eye calibration may become degenerate.",
+                            repeated_pose_count,
+                        )
 
                 img_path = os.path.join(out_dir, f"raw_{sample_count:04d}.jpg")
                 cv2.imwrite(img_path, frame)

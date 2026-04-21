@@ -58,6 +58,7 @@ conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 | 3 | 雙目深度 | `python phase3_stereo_depth/main_stereo_depth.py` |
 | 5 | **VLM Agent** | `python phase5_vlm_planning/test_vlm_agent.py` |
 | 7 | **Eye-to-Hand** | `python phase7_eye_to_hand/main_eye_to_hand.py` |
+| 7b | **Arm Mesh ICP 外參** | `python phase7_arm_icp/main_arm_icp.py` |
 | 8 | **RealSense 即時點雲** | `python phase8_realsense_pointcloud/main_realsense_pointcloud.py` |
 
 ## Phase 5 — 三種模式
@@ -82,6 +83,25 @@ conda run -n ro002 python phase8_realsense_pointcloud/main_realsense_pointcloud.
 ```
 
 - Phase 8 目前先獨立運行，不會改動 Phase 5 的 stereo 流程。
+
+## Phase 7b 備註（Arm Mesh ICP）
+
+- 目的：由相機點雲與機械臂 mesh 對齊，估計 `T_cam2arm`。
+- 預設流程：直接在 `phase7_arm_icp` 內抓取 RealSense 一幀並執行 ICP（不需要先跑 phase8 存檔）。
+- 常用初始值已整合到 `config/settings.yaml` 的 `phase7_arm_icp` 區塊（mesh、init pose、ICP 參數、是否自動回寫）。
+
+```bash
+conda run -n ro002 python phase7_arm_icp/main_arm_icp.py
+```
+
+- 若你要重跑舊資料，也可指定離線點雲：
+
+```bash
+conda run -n ro002 python phase7_arm_icp/main_arm_icp.py \
+	--target-cloud phase8_realsense_pointcloud/outputs/cloud_xxx.ply
+```
+
+- 需要暫時覆蓋設定時，才用 CLI 參數（例如 `--init-txyz`、`--init-rxyz-deg`、`--mesh-dir`）。
 
 ## External Dependencies
 
