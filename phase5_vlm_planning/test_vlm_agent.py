@@ -36,7 +36,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from shared.camera_manager import CameraReader
+from phase8_realsense_pointcloud.src.pointcloud_builder import colorize_depth
+from phase8_realsense_pointcloud.src.realsense_provider import RealSenseProvider
 
 
 # ── 工具函數 ──
@@ -68,10 +69,6 @@ class PipelineState:
     def __init__(self):
         self.stage: str = "LOADING"
 
-        # Phase3 模型
-        self.rectifier = None
-        self.stereo_inf = None
-
         # Phase5 模型
         self.sam3_skill = None
         self.capture_skill = None
@@ -80,8 +77,7 @@ class PipelineState:
         self.vlm_client = None
 
         # 相機
-        self.reader_l: CameraReader | None = None
-        self.reader_r: CameraReader | None = None
+        self.provider: RealSenseProvider | None = None
 
         # 即時數據
         self.live_rect_left: np.ndarray | None = None
@@ -120,7 +116,7 @@ class VLMAgentGUI:
         self._state = PipelineState()
         self._state.intrinsics = _load_intrinsics()
         self._settings = _load_settings()
-        self._stereo_cfg = self._settings.get("stereo_depth", {})
+        self._rs_cfg = self._settings.get("phase8_realsense", {})
         cp_cfg = self._settings.get("skill_capture_point", {})
         self._state.workspace_limits = cp_cfg.get("workspace_limits", {
             "x": [-0.5, 0.5], "y": [-0.5, 0.5], "z": [0.0, 2.0],
@@ -449,43 +445,6 @@ class VLMAgentGUI:
         def _load():
             errors = []
 
-            # Phase3: StereoRectifier
-            try:
-                from phase3_stereo_depth.src.stereo_rectifier import StereoRectifier
-                intrinsics_path = os.path.join(
-                    _ROOT, "phase1_intrinsics", "outputs", "intrinsics.json",
-                )
-                extrinsics_path = os.path.join(
-                    _ROOT, "phase2_extrinsics", "outputs", "extrinsics.json",
-                )
-                self._state.rectifier = StereoRectifier(
-                    intrinsics_path, extrinsics_path, "cam0_cam1",
-                )
-                self._state.K_rect = self._state.rectifier._P1[:3, :3].copy()
-                self._state.Q = self._state.rectifier.Q.copy()
-            except Exception as exc:
-                errors.append(f"Rectifier: {exc}")
-
-            # Phase3: StereoInference
-            try:
-                from phase3_stereo_depth.src.stereo_inference import StereoInference
-                model_dir = self._stereo_cfg.get(
-                    "model_dir",
-                    "external/Fast-FoundationStereo/weights/23-36-37/"
-                    "model_best_bp2_serialize.pth",
-                )
-                if not os.path.isabs(model_dir):
-                    model_dir = os.path.join(_ROOT, model_dir)
-                self._state.stereo_inf = StereoInference(
-                    model_dir=model_dir,
-                    max_disp=self._stereo_cfg.get("max_disparity", 256),
-                    valid_iters=self._stereo_cfg.get("valid_iters", 8),
-                    pad_multiple=self._stereo_cfg.get("pad_multiple", 32),
-                )
-                self._state.stereo_inf.set_fast_mode(True)
-            except Exception as exc:
-                errors.append(f"StereoInference: {exc}")
-
             # Phase5: SAM3
             try:
                 from phase5_vlm_planning.skills.skill_sam3 import SAM3Skill
@@ -545,67 +504,56 @@ class VLMAgentGUI:
     def _start_live(self):
         if self._state.stage != "IDLE":
             return
-        if self._state.rectifier is None or self._state.stereo_inf is None:
-            self._status_var.set("Phase3 models not loaded")
+        try:
+            provider = RealSenseProvider(
+                width=int(self._rs_cfg.get("width", 640)),
+                height=int(self._rs_cfg.get("height", 480)),
+                fps=int(self._rs_cfg.get("fps", 30)),
+                warmup_frames=int(self._rs_cfg.get("warmup_frames", 20)),
+            )
+            provider.start()
+        except Exception as exc:
+            self._status_var.set(f"RealSense start failed: {exc}")
             return
 
-        cam_cfg = self._settings.get("cameras", {})
-        cam_l_idx = cam_cfg.get("cam0", {}).get("index", 0)
-        cam_r_idx = cam_cfg.get("cam1", {}).get("index", 1)
+        intr = provider.intrinsics
+        self._state.provider = provider
+        self._state.K_rect = np.array(
+            [[intr.fx, 0.0, intr.cx], [0.0, intr.fy, intr.cy], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
 
-        self._state.reader_l = CameraReader(cam_l_idx)
-        self._state.reader_r = CameraReader(cam_r_idx)
-        self._state.reader_l.start()
-        self._state.reader_r.start()
-
-        self._state.stereo_inf.set_fast_mode(True)
         self._live_running = True
         self._live_thread = threading.Thread(target=self._live_loop, daemon=True)
         self._live_thread.start()
 
         self._set_stage("LIVE")
-        self._status_var.set("Live stereo depth running...")
+        self._status_var.set("Live RealSense depth running...")
         self._update_live_display()
 
     def _live_loop(self):
-        from phase3_stereo_depth.src.depth_converter import disparity_to_depth
-        from phase3_stereo_depth.src.depth_utils import colorize_depth
-
-        rectifier = self._state.rectifier
-        inference = self._state.stereo_inf
-        sd_cfg = self._stereo_cfg
+        provider = self._state.provider
+        rs_cfg = self._rs_cfg
 
         frame_count = 0
         fps_start = time.time()
 
         while self._live_running:
-            reader_l = self._state.reader_l
-            reader_r = self._state.reader_r
-            if reader_l is None or reader_r is None:
+            if provider is None:
                 time.sleep(0.01)
                 continue
-            frame_l = reader_l.frame
-            frame_r = reader_r.frame
-            if frame_l is None or frame_r is None:
-                time.sleep(0.01)
-                continue
-
-            frame_l = frame_l.copy()
-            frame_r = frame_r.copy()
 
             t0 = time.time()
-            rect_l, rect_r = rectifier.rectify(frame_l, frame_r)
-            disp = inference.predict_disparity(rect_l, rect_r)
+            try:
+                color, depth = provider.get_frames(timeout_ms=1000)
+            except Exception:
+                time.sleep(0.01)
+                continue
             latency = (time.time() - t0) * 1000
 
-            depth = disparity_to_depth(
-                disp, rectifier.focal_length, rectifier.baseline,
-                min_depth=sd_cfg.get("min_depth", 0.05),
-                max_depth=sd_cfg.get("max_depth", 10.0),
-            )
-            depth_color = colorize_depth(depth, sd_cfg.get("max_depth", 10.0))
+            depth_color = colorize_depth(depth, float(rs_cfg.get("max_depth", 5.0)))
 
-            self._state.live_rect_left = rect_l
+            self._state.live_rect_left = color
             self._state.live_depth = depth
             self._state.live_depth_color = depth_color
 
@@ -653,14 +601,9 @@ class VLMAgentGUI:
         if self._live_thread is not None:
             self._live_thread.join(timeout=3.0)
             self._live_thread = None
-        if self._state.reader_l is not None:
-            self._state.reader_l.stop()
-            self._state.reader_l = None
-        if self._state.reader_r is not None:
-            self._state.reader_r.stop()
-            self._state.reader_r = None
-        if self._state.stereo_inf is not None:
-            self._state.stereo_inf.set_fast_mode(False)
+        if self._state.provider is not None:
+            self._state.provider.stop()
+            self._state.provider = None
 
     def _stop_live_and_idle(self):
         self._stop_live()
@@ -1477,9 +1420,7 @@ class VLMAgentGUI:
 
     def _resume_live(self):
         """恢復 live 模式"""
-        if (self._state.reader_l is not None and self._state.reader_r is not None
-                and self._state.stereo_inf is not None):
-            self._state.stereo_inf.set_fast_mode(True)
+        if self._state.provider is not None:
             self._live_running = True
             self._live_thread = threading.Thread(
                 target=self._live_loop, daemon=True,

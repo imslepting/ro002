@@ -59,6 +59,7 @@ conda run -n ro002 python -c "import sam3, grasp_gen; print('ok')"
 | 5 | **VLM Agent** | `python phase5_vlm_planning/test_vlm_agent.py` |
 | 7 | **Eye-to-Hand** | `python phase7_eye_to_hand/main_eye_to_hand.py` |
 | 7b | **Arm Mesh ICP 外參** | `python phase7_arm_icp/main_arm_icp.py` |
+| 7c | **Arm ICP GUI（即時點雲+手動對齊）** | `python phase7_arm_icp/main_arm_icp_gui.py` |
 | 8 | **RealSense 即時點雲** | `python phase8_realsense_pointcloud/main_realsense_pointcloud.py` |
 
 ## Phase 5 — 三種模式
@@ -102,6 +103,34 @@ conda run -n ro002 python phase7_arm_icp/main_arm_icp.py \
 ```
 
 - 需要暫時覆蓋設定時，才用 CLI 參數（例如 `--init-txyz`、`--init-rxyz-deg`、`--mesh-dir`）。
+
+## Phase 7c 備註（Arm ICP GUI）
+
+- 目的：在 live RealSense 點雲上以 GUI 操作機械臂座標軸，並可一鍵做 Charuco 初始化與 ICP。
+- 啟動（建議）：
+
+```bash
+conda run -n ro002 python phase7_arm_icp/main_arm_icp_gui.py
+```
+
+- 啟動後預設會從 `config/settings.yaml` 的 `arm.T_cam2arm` 載入初始姿態。
+- 主要操作流程：
+	1. `Start` 開相機串流。
+	2. `Open Point Cloud` 顯示 3D live cloud + 虛擬座標軸。
+	3. `Calibration`：以 Charuco（讀取 `calibration.charuco`）初始化座標軸到棋盤中心姿態。
+	4. 在 `Tx/Ty/Tz/Rx/Ry/Rz` 輸入框微調到機械臂原點。
+	5. `Save` 將當前控制姿態轉為 `T_cam2arm` 並寫回 `config/settings.yaml`。
+
+- 輸入框快捷操作：
+	- 任何數值變更都會即時刷新虛擬座標軸。
+	- 選取輸入框後按 `↑/↓` 可連續調整：
+		- `Tx/Ty/Tz` 每次 `0.01` m
+		- `Rx/Ry/Rz` 每次 `0.5` deg
+
+- 其他按鈕：
+	- `Reset to Settings`：回到 `settings.yaml` 目前值
+	- `Apply Pose`：提交目前控制姿態（可搭配自動回寫）
+	- `cpi solve`：執行 ICP 精配準
 
 ## External Dependencies
 

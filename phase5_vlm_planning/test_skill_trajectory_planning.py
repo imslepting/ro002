@@ -1,10 +1,10 @@
-"""TrajectoryPlanning Skill 互動測試 GUI — 即時雙目深度 + 階段式 Pipeline
+"""TrajectoryPlanning Skill 互動測試 GUI — 即時 RealSense 深度 + 階段式 Pipeline
 
 用法:
     conda run -n ro002 python phase5_vlm_planning/test_skill_trajectory_planning.py
 
 階段式流水線:
-    1. 開啟雙目相機 → 即時顯示 RGB + 深度（可點擊量距）
+    1. 開啟 RealSense → 即時顯示 RGB + 深度（可點擊量距）
     2. 按 [Capture] → 凍結當前幀
     3. 輸入 text → [Segment] → SAM3 mask 覆蓋顯示
     4. [Capture Point] → GraspGen 抓取結果顯示
@@ -42,7 +42,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from shared.camera_manager import CameraReader
+from phase8_realsense_pointcloud.src.pointcloud_builder import colorize_depth
+from phase8_realsense_pointcloud.src.realsense_provider import RealSenseProvider
 
 
 # ── 工具函數 ──
@@ -70,6 +71,57 @@ def _load_settings() -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _pixel_to_3d(u: int, v: int, depth: np.ndarray, K: np.ndarray) -> np.ndarray | None:
+    h, w = depth.shape[:2]
+    if u < 0 or v < 0 or u >= w or v >= h:
+        return None
+    z = float(depth[v, u])
+    if z <= 0.0:
+        return None
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    x = (u - cx) * z / fx
+    y = (v - cy) * z / fy
+    return np.array([x, y, z], dtype=np.float64)
+
+
+def _measure_distance_3d(
+    p0: tuple[int, int], p1: tuple[int, int], depth: np.ndarray, K: np.ndarray,
+) -> float | None:
+    a = _pixel_to_3d(p0[0], p0[1], depth, K)
+    b = _pixel_to_3d(p1[0], p1[1], depth, K)
+    if a is None or b is None:
+        return None
+    return float(np.linalg.norm(a - b))
+
+
+def _draw_measurement_overlay(
+    img: np.ndarray,
+    p0: tuple[int, int] | None,
+    p1: tuple[int, int] | None,
+    distance: float | None,
+) -> np.ndarray:
+    out = img.copy()
+    if p0 is None:
+        return out
+    cv2.circle(out, p0, 4, (0, 255, 255), -1)
+    if p1 is not None:
+        cv2.circle(out, p1, 4, (0, 255, 255), -1)
+        cv2.line(out, p0, p1, (0, 255, 255), 2)
+        if distance is not None:
+            mid = ((p0[0] + p1[0]) // 2, (p0[1] + p1[1]) // 2)
+            cv2.putText(
+                out,
+                f"{distance * 100:.1f}cm",
+                (mid[0] + 6, mid[1] - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 255),
+                1,
+            )
+    return out
+
+
 # ── 共享狀態容器 ──
 
 class PipelineState:
@@ -78,17 +130,12 @@ class PipelineState:
     def __init__(self):
         self.stage: str = "LOADING"
 
-        # Phase3 模型
-        self.rectifier = None   # StereoRectifier
-        self.stereo_inf = None  # StereoInference
-
         # Phase5 模型
         self.sam3_skill = None
         self.capture_skill = None
 
         # 相機
-        self.reader_l: CameraReader | None = None
-        self.reader_r: CameraReader | None = None
+        self.provider: RealSenseProvider | None = None
 
         # 即時數據（bg thread 寫，main thread 讀）
         self.live_rect_left: np.ndarray | None = None
@@ -102,7 +149,6 @@ class PipelineState:
         self.frozen_depth: np.ndarray | None = None
         self.frozen_depth_color: np.ndarray | None = None
         self.K_rect: np.ndarray | None = None
-        self.Q: np.ndarray | None = None
 
         # 量測
         self.measure_a: tuple[int, int] | None = None
@@ -138,14 +184,14 @@ class TrajectoryPlanningPipelineGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("TrajectoryPlanning Pipeline (Live Stereo + SAM3 + GraspGen + cuRobo)")
+        self.root.title("TrajectoryPlanning Pipeline (Live RealSense + SAM3 + GraspGen + cuRobo)")
         self.root.geometry("1400x950")
         self.root.minsize(1100, 800)
 
         self._state = PipelineState()
         self._state.intrinsics = _load_intrinsics()
         self._settings = _load_settings()
-        self._stereo_cfg = self._settings.get("stereo_depth", {})
+        self._rs_cfg = self._settings.get("phase8_realsense", {})
         cp_cfg = self._settings.get("skill_capture_point", {})
         self._state.workspace_limits = cp_cfg.get("workspace_limits", {
             "x": [-0.5, 0.5], "y": [-0.5, 0.5], "z": [0.0, 0.6],
@@ -392,43 +438,6 @@ class TrajectoryPlanningPipelineGUI:
         def _load():
             errors = []
 
-            # Phase3: StereoRectifier
-            try:
-                from phase3_stereo_depth.src.stereo_rectifier import StereoRectifier
-                intrinsics_path = os.path.join(
-                    _ROOT, "phase1_intrinsics", "outputs", "intrinsics.json",
-                )
-                extrinsics_path = os.path.join(
-                    _ROOT, "phase2_extrinsics", "outputs", "extrinsics.json",
-                )
-                self._state.rectifier = StereoRectifier(
-                    intrinsics_path, extrinsics_path, "cam0_cam1",
-                )
-                self._state.K_rect = self._state.rectifier._P1[:3, :3].copy()
-                self._state.Q = self._state.rectifier.Q.copy()
-            except Exception as exc:
-                errors.append(f"Rectifier: {exc}")
-
-            # Phase3: StereoInference
-            try:
-                from phase3_stereo_depth.src.stereo_inference import StereoInference
-                model_dir = self._stereo_cfg.get(
-                    "model_dir",
-                    "external/Fast-FoundationStereo/weights/23-36-37/"
-                    "model_best_bp2_serialize.pth",
-                )
-                if not os.path.isabs(model_dir):
-                    model_dir = os.path.join(_ROOT, model_dir)
-                self._state.stereo_inf = StereoInference(
-                    model_dir=model_dir,
-                    max_disp=self._stereo_cfg.get("max_disparity", 256),
-                    valid_iters=self._stereo_cfg.get("valid_iters", 8),
-                    pad_multiple=self._stereo_cfg.get("pad_multiple", 32),
-                )
-                self._state.stereo_inf.set_fast_mode(True)
-            except Exception as exc:
-                errors.append(f"StereoInference: {exc}")
-
             # Phase5: SAM3
             try:
                 from phase5_vlm_planning.skills.skill_sam3 import SAM3Skill
@@ -464,32 +473,37 @@ class TrajectoryPlanningPipelineGUI:
             print(f"[Pipeline] Model load errors: {msg}")
 
     # ══════════════════════════════════════════════════════════════
-    # Live Loop — 即時雙目深度推理
+    # Live Loop — 即時 RealSense 深度推理
     # ══════════════════════════════════════════════════════════════
 
     def _start_live(self):
         if self._state.stage != "IDLE":
             return
-        if self._state.rectifier is None or self._state.stereo_inf is None:
-            self._status_var.set("Phase3 models not loaded — cannot start live")
+        try:
+            provider = RealSenseProvider(
+                width=int(self._rs_cfg.get("width", 640)),
+                height=int(self._rs_cfg.get("height", 480)),
+                fps=int(self._rs_cfg.get("fps", 30)),
+                warmup_frames=int(self._rs_cfg.get("warmup_frames", 20)),
+            )
+            provider.start()
+        except Exception as exc:
+            self._status_var.set(f"RealSense start failed: {exc}")
             return
 
-        cam_cfg = self._settings.get("cameras", {})
-        cam_l_idx = cam_cfg.get("cam0", {}).get("index", 0)
-        cam_r_idx = cam_cfg.get("cam1", {}).get("index", 1)
+        intr = provider.intrinsics
+        self._state.provider = provider
+        self._state.K_rect = np.array(
+            [[intr.fx, 0.0, intr.cx], [0.0, intr.fy, intr.cy], [0.0, 0.0, 1.0]],
+            dtype=np.float64,
+        )
 
-        self._state.reader_l = CameraReader(cam_l_idx)
-        self._state.reader_r = CameraReader(cam_r_idx)
-        self._state.reader_l.start()
-        self._state.reader_r.start()
-
-        self._state.stereo_inf.set_fast_mode(True)
         self._live_running = True
         self._live_thread = threading.Thread(target=self._live_loop, daemon=True)
         self._live_thread.start()
 
         self._set_stage("LIVE")
-        self._status_var.set("Live stereo depth running...")
+        self._status_var.set("Live RealSense depth running...")
         self._update_live_display()
 
     def _stop_live(self):
@@ -497,54 +511,33 @@ class TrajectoryPlanningPipelineGUI:
         if self._live_thread is not None:
             self._live_thread.join(timeout=3.0)
             self._live_thread = None
-        if self._state.reader_l is not None:
-            self._state.reader_l.stop()
-            self._state.reader_l = None
-        if self._state.reader_r is not None:
-            self._state.reader_r.stop()
-            self._state.reader_r = None
-        if self._state.stereo_inf is not None:
-            self._state.stereo_inf.set_fast_mode(False)
+        if self._state.provider is not None:
+            self._state.provider.stop()
+            self._state.provider = None
 
     def _live_loop(self):
-        from phase3_stereo_depth.src.depth_converter import disparity_to_depth
-        from phase3_stereo_depth.src.depth_utils import colorize_depth
-
-        rectifier = self._state.rectifier
-        inference = self._state.stereo_inf
-        sd_cfg = self._stereo_cfg
+        provider = self._state.provider
+        rs_cfg = self._rs_cfg
 
         frame_count = 0
         fps_start = time.time()
 
         while self._live_running:
-            reader_l = self._state.reader_l
-            reader_r = self._state.reader_r
-            if reader_l is None or reader_r is None:
+            if provider is None:
                 time.sleep(0.01)
                 continue
-            frame_l = reader_l.frame
-            frame_r = reader_r.frame
-            if frame_l is None or frame_r is None:
-                time.sleep(0.01)
-                continue
-
-            frame_l = frame_l.copy()
-            frame_r = frame_r.copy()
 
             t0 = time.time()
-            rect_l, rect_r = rectifier.rectify(frame_l, frame_r)
-            disp = inference.predict_disparity(rect_l, rect_r)
+            try:
+                color, depth = provider.get_frames(timeout_ms=1000)
+            except Exception:
+                time.sleep(0.01)
+                continue
             latency = (time.time() - t0) * 1000
 
-            depth = disparity_to_depth(
-                disp, rectifier.focal_length, rectifier.baseline,
-                min_depth=sd_cfg.get("min_depth", 0.05),
-                max_depth=sd_cfg.get("max_depth", 10.0),
-            )
-            depth_color = colorize_depth(depth, sd_cfg.get("max_depth", 10.0))
+            depth_color = colorize_depth(depth, float(rs_cfg.get("max_depth", 5.0)))
 
-            self._state.live_rect_left = rect_l
+            self._state.live_rect_left = color
             self._state.live_depth = depth
             self._state.live_depth_color = depth_color
 
@@ -590,9 +583,9 @@ class TrajectoryPlanningPipelineGUI:
             self._depth_canvas_size = (dep_cw, dep_ch)
 
         depth_at_cursor = ""
-        if state.measure_a is not None and state.live_depth is not None and state.Q is not None:
-            from phase3_stereo_depth.src.depth_utils import pixel_to_3d
-            pt = pixel_to_3d(state.measure_a[0], state.measure_a[1], state.live_depth, state.Q)
+        K = self._get_K()
+        if state.measure_a is not None and state.live_depth is not None and K is not None:
+            pt = _pixel_to_3d(state.measure_a[0], state.measure_a[1], state.live_depth, K)
             if pt is not None:
                 depth_at_cursor = f"Depth: {pt[2]:.2f}m"
 
@@ -673,8 +666,7 @@ class TrajectoryPlanningPipelineGUI:
         self._photo_result = None
         self._traj_info_var.set("")
 
-        if self._state.reader_l is not None and self._state.reader_r is not None:
-            self._state.stereo_inf.set_fast_mode(True)
+        if self._state.provider is not None:
             self._live_running = True
             self._live_thread = threading.Thread(target=self._live_loop, daemon=True)
             self._live_thread.start()
@@ -683,7 +675,7 @@ class TrajectoryPlanningPipelineGUI:
             self._update_live_display()
         else:
             self._set_stage("IDLE")
-            self._status_var.set("Cameras released — press Start Live")
+            self._status_var.set("Camera released — press Start Live")
 
     # ══════════════════════════════════════════════════════════════
     # 離線 Fallback — Open RGB / Open Depth
@@ -725,7 +717,7 @@ class TrajectoryPlanningPipelineGUI:
         if self._state.stage == "LOADING" or self._state.stage == "LIVE":
             return
         path = filedialog.askopenfilename(
-            initialdir=os.path.join(_ROOT, "phase3_stereo_depth", "outputs", "stereo_depth"),
+            initialdir=os.path.join(_ROOT, "phase8_realsense_pointcloud", "outputs"),
             filetypes=[("NumPy", "*.npy"), ("All", "*.*")],
         )
         if not path:
@@ -737,8 +729,7 @@ class TrajectoryPlanningPipelineGUI:
             return
 
         self._state.frozen_depth = depth
-        from phase3_stereo_depth.src.depth_utils import colorize_depth
-        max_depth = self._stereo_cfg.get("max_depth", 10.0)
+        max_depth = float(self._rs_cfg.get("max_depth", 5.0))
         self._state.frozen_depth_color = colorize_depth(depth, max_depth)
 
         h, w = depth.shape[:2]
@@ -1136,8 +1127,8 @@ class TrajectoryPlanningPipelineGUI:
     def _handle_click(self, event, canvas):
         state = self._state
         depth = state.live_depth if state.stage == "LIVE" else state.frozen_depth
-        Q = state.Q
-        if depth is None or Q is None:
+        K = self._get_K()
+        if depth is None or K is None:
             return
 
         pt = self._canvas_to_image_coords(event, canvas)
@@ -1149,11 +1140,8 @@ class TrajectoryPlanningPipelineGUI:
             state.measure_b = None
             state.measure_dist = None
         else:
-            from phase3_stereo_depth.src.depth_utils import measure_distance_3d
             state.measure_b = pt
-            state.measure_dist = measure_distance_3d(
-                state.measure_a, state.measure_b, depth, Q,
-            )
+            state.measure_dist = _measure_distance_3d(state.measure_a, state.measure_b, depth, K)
 
         if state.stage != "LIVE":
             self._redraw_all()
@@ -1184,17 +1172,12 @@ class TrajectoryPlanningPipelineGUI:
         return ImageTk.PhotoImage(Image.fromarray(rgb))
 
     def _apply_measurement_overlay(
-        self, img: np.ndarray, depth: np.ndarray | None, Q: np.ndarray | None,
+        self, img: np.ndarray, depth: np.ndarray | None, _q_unused: np.ndarray | None,
     ) -> np.ndarray:
         state = self._state
         if state.measure_a is None:
             return img
-        from phase3_stereo_depth.src.depth_utils import draw_measurement_overlay
-        return draw_measurement_overlay(
-            img, state.measure_a, state.measure_b,
-            distance=state.measure_dist,
-            depth=depth, Q=Q,
-        )
+        return _draw_measurement_overlay(img, state.measure_a, state.measure_b, state.measure_dist)
 
     def _on_workspace_toggle(self):
         if self._state.stage not in ("LIVE", "LOADING"):
