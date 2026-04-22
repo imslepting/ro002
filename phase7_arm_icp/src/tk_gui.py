@@ -16,6 +16,13 @@ import yaml
 from shared.tk_utils import BTN_ACCENT, BTN_DANGER, DARK_BG, cv_to_photoimage
 
 try:
+    from phase1_intrinsics.src.board_generator import create_board
+    from phase1_intrinsics.src.charuco_detector import detect_charuco
+except Exception:
+    create_board = None
+    detect_charuco = None
+
+try:
     from phase7_arm_icp.src.icp_calibrator import (
         _matrix_to_euler_xyz_deg,
         calibrate_cam_to_arm,
@@ -263,6 +270,12 @@ class _OverlayCloudViewer:
 
 class Phase7ArmIcpGUI:
     _UI_INTERVAL_MS = 50
+    _CHARUCO_MIN_CORNERS = 8
+    _CHARUCO_TARGET_FRAMES = 10
+    _CHARUCO_MIN_VALID_FRAMES = 7
+    _CHARUCO_MAX_MEDIAN_REPROJ_PX = 1.2
+    _CHARUCO_MAX_POS_STD_M = 0.025
+    _CHARUCO_MAX_ROT_STD_DEG = 5.0
 
     def __init__(self, root: tk.Tk, cfg: dict, root_dir: str, settings_path: str):
         self.root = root
@@ -284,6 +297,7 @@ class Phase7ArmIcpGUI:
         self._viewer_enabled = False
         self._running = False
         self._solving = False
+        self._calibrating = False
 
         self._loop_thread: threading.Thread | None = None
 
@@ -301,6 +315,7 @@ class Phase7ArmIcpGUI:
         self._icp_metrics = tk.StringVar(value="ICP: not solved")
         self._viewer_btn_text = tk.StringVar(value="Open Point Cloud")
         self._solve_btn_text = tk.StringVar(value="cpi solve")
+        self._calib_btn_text = tk.StringVar(value="Calibration")
 
         # Manual adjustment sliders
         self._tx_var = tk.DoubleVar()
@@ -332,16 +347,7 @@ class Phase7ArmIcpGUI:
         self.viewer.set_model_points(self._arm_model_points)
 
         # Initialize slider values from control pose (arm->cam in camera frame)
-        self._tx_var.set(float(self._ctrl_t_arm_to_cam[0, 3]))
-        self._ty_var.set(float(self._ctrl_t_arm_to_cam[1, 3]))
-        self._tz_var.set(float(self._ctrl_t_arm_to_cam[2, 3]))
-        rx, ry, rz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
-        self._rx_var.set(rx)
-        self._ry_var.set(ry)
-        self._rz_var.set(rz)
-        self._prev_tx = self._tx_var.get()
-        self._prev_ty = self._ty_var.get()
-        self._prev_tz = self._tz_var.get()
+        self._apply_ctrl_pose_to_ui()
 
         self._build_ui()
 
@@ -363,6 +369,286 @@ class Phase7ArmIcpGUI:
             self._status.set(f"Model load failed: {exc}")
             return np.zeros((0, 3), dtype=np.float64)
 
+    def _apply_ctrl_pose_to_ui(self) -> None:
+        """Synchronize sliders and viewer with current control pose."""
+        self._syncing_sliders = True
+        self._tx_var.set(float(self._ctrl_t_arm_to_cam[0, 3]))
+        self._ty_var.set(float(self._ctrl_t_arm_to_cam[1, 3]))
+        self._tz_var.set(float(self._ctrl_t_arm_to_cam[2, 3]))
+        rx, ry, rz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
+        self._rx_var.set(rx)
+        self._ry_var.set(ry)
+        self._rz_var.set(rz)
+        self._syncing_sliders = False
+
+        self._prev_tx = self._tx_var.get()
+        self._prev_ty = self._ty_var.get()
+        self._prev_tz = self._tz_var.get()
+        self.viewer.set_t_arm_to_cam(self._ctrl_t_arm_to_cam)
+
+    @staticmethod
+    def _rotmat_to_quat_xyzw(r: np.ndarray) -> np.ndarray:
+        """Convert rotation matrix to quaternion [x, y, z, w]."""
+        m = np.asarray(r, dtype=np.float64)
+        trace = float(np.trace(m))
+        if trace > 0.0:
+            s = np.sqrt(trace + 1.0) * 2.0
+            w = 0.25 * s
+            x = (m[2, 1] - m[1, 2]) / s
+            y = (m[0, 2] - m[2, 0]) / s
+            z = (m[1, 0] - m[0, 1]) / s
+        elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+            s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
+            w = (m[2, 1] - m[1, 2]) / s
+            x = 0.25 * s
+            y = (m[0, 1] + m[1, 0]) / s
+            z = (m[0, 2] + m[2, 0]) / s
+        elif m[1, 1] > m[2, 2]:
+            s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
+            w = (m[0, 2] - m[2, 0]) / s
+            x = (m[0, 1] + m[1, 0]) / s
+            y = 0.25 * s
+            z = (m[1, 2] + m[2, 1]) / s
+        else:
+            s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
+            w = (m[1, 0] - m[0, 1]) / s
+            x = (m[0, 2] + m[2, 0]) / s
+            y = (m[1, 2] + m[2, 1]) / s
+            z = 0.25 * s
+        return np.array([x, y, z, w], dtype=np.float64)
+
+    @staticmethod
+    def _quat_xyzw_to_rotmat(q: np.ndarray) -> np.ndarray:
+        """Convert quaternion [x, y, z, w] to rotation matrix."""
+        x, y, z, w = [float(v) for v in q]
+        xx, yy, zz = x * x, y * y, z * z
+        xy, xz, yz = x * y, x * z, y * z
+        wx, wy, wz = w * x, w * y, w * z
+        return np.array([
+            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        ], dtype=np.float64)
+
+    def _quaternion_average(self, rot_mats: list[np.ndarray]) -> np.ndarray:
+        """Average rotations using normalized quaternion accumulation."""
+        if not rot_mats:
+            return np.eye(3, dtype=np.float64)
+
+        quats = []
+        for r in rot_mats:
+            q = self._rotmat_to_quat_xyzw(r)
+            if quats and np.dot(quats[0], q) < 0.0:
+                q = -q
+            quats.append(q)
+
+        q_mean = np.mean(np.asarray(quats, dtype=np.float64), axis=0)
+        norm = float(np.linalg.norm(q_mean))
+        if norm < 1e-12:
+            return rot_mats[0]
+        q_mean /= norm
+        return self._quat_xyzw_to_rotmat(q_mean)
+
+    @staticmethod
+    def _rotation_angle_deg(r_a: np.ndarray, r_b: np.ndarray) -> float:
+        r_rel = np.asarray(r_a, dtype=np.float64).T @ np.asarray(r_b, dtype=np.float64)
+        c = (np.trace(r_rel) - 1.0) * 0.5
+        c = float(np.clip(c, -1.0, 1.0))
+        return float(np.degrees(np.arccos(c)))
+
+    def _build_charuco_axes_transform(self, board) -> np.ndarray:
+        """Transform OpenCV Charuco board frame into requested long-X, short-Y frame."""
+        corners = np.asarray(board.getChessboardCorners(), dtype=np.float64).reshape(-1, 3)
+        if corners.shape[0] == 0:
+            return np.eye(4, dtype=np.float64)
+
+        mins = corners.min(axis=0)
+        maxs = corners.max(axis=0)
+        span_x = float(maxs[0] - mins[0])
+        span_y = float(maxs[1] - mins[1])
+
+        charuco_cfg = self.cfg.get("calibration", {}).get("charuco", {})
+        origin_mode = str(charuco_cfg.get("origin", "center"))
+        custom_origin = charuco_cfg.get("custom_origin")
+
+        if origin_mode == "center":
+            origin = np.array([(mins[0] + maxs[0]) * 0.5, (mins[1] + maxs[1]) * 0.5, 0.0], dtype=np.float64)
+        elif origin_mode == "custom" and isinstance(custom_origin, (list, tuple)) and len(custom_origin) == 3:
+            origin = np.asarray(custom_origin, dtype=np.float64).reshape(3)
+        else:
+            origin = np.zeros(3, dtype=np.float64)
+
+        t = np.eye(4, dtype=np.float64)
+        if span_x >= span_y:
+            r = np.eye(3, dtype=np.float64)
+        else:
+            r = np.array(
+                [
+                    [0.0, 1.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+
+        t[:3, :3] = r
+        t[:3, 3] = -r @ origin
+        return t
+
+    def _estimate_charuco_pose_one_frame(self, frame_bgr: np.ndarray, board, dictionary, t_boardcv_to_target: np.ndarray):
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        det = detect_charuco(
+            gray,
+            board,
+            dictionary,
+            refine_subpix=True,
+            min_corners=self._CHARUCO_MIN_CORNERS,
+        )
+        if not det.success or det.charuco_corners is None or det.charuco_ids is None:
+            return None
+
+        obj_pts, img_pts = board.matchImagePoints(det.charuco_corners, det.charuco_ids)
+        if obj_pts is None or img_pts is None or len(obj_pts) < self._CHARUCO_MIN_CORNERS:
+            return None
+
+        obj_pts = np.asarray(obj_pts, dtype=np.float64).reshape(-1, 3)
+        img_pts = np.asarray(img_pts, dtype=np.float64).reshape(-1, 2)
+        obj_h = np.hstack([obj_pts, np.ones((obj_pts.shape[0], 1), dtype=np.float64)])
+        obj_pts_target = (t_boardcv_to_target @ obj_h.T).T[:, :3]
+
+        intr = self.provider.intrinsics
+        k = np.array(
+            [
+                [float(intr.fx), 0.0, float(intr.cx)],
+                [0.0, float(intr.fy), float(intr.cy)],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        d = np.zeros((5, 1), dtype=np.float64)
+
+        ok, rvec, tvec = cv2.solvePnP(
+            obj_pts_target,
+            img_pts,
+            k,
+            d,
+            flags=cv2.SOLVEPNP_ITERATIVE,
+        )
+        if not ok:
+            return None
+
+        proj, _ = cv2.projectPoints(obj_pts_target, rvec, tvec, k, d)
+        proj = np.asarray(proj, dtype=np.float64).reshape(-1, 2)
+        reproj_rmse = float(np.sqrt(np.mean(np.sum((proj - img_pts) ** 2, axis=1))))
+
+        r, _ = cv2.Rodrigues(rvec)
+        t = np.asarray(tvec, dtype=np.float64).reshape(3)
+        return {
+            "r": np.asarray(r, dtype=np.float64),
+            "t": t,
+            "rmse": reproj_rmse,
+            "num_corners": int(len(obj_pts_target)),
+        }
+
+    def on_calibration(self) -> None:
+        if self._calibrating:
+            return
+        if create_board is None or detect_charuco is None:
+            self._status.set("Calibration unavailable: Charuco modules not importable")
+            return
+        if not self._running:
+            self._status.set("Start camera first before Calibration")
+            return
+
+        self._calibrating = True
+        self._calib_btn_text.set("Calibrating...")
+        self._status.set("Calibration: collecting Charuco poses...")
+        threading.Thread(target=self._calibration_worker, daemon=True).start()
+
+    def _calibration_worker(self) -> None:
+        try:
+            charuco_cfg = self.cfg.get("calibration", {}).get("charuco", {})
+            board, dictionary = create_board(charuco_cfg)
+            t_boardcv_to_target = self._build_charuco_axes_transform(board)
+
+            samples = []
+            attempts = 0
+            max_attempts = 35
+            while len(samples) < self._CHARUCO_TARGET_FRAMES and attempts < max_attempts and self._running:
+                attempts += 1
+                frame = None if self._latest_color is None else self._latest_color.copy()
+                if frame is None:
+                    time.sleep(0.05)
+                    continue
+
+                est = self._estimate_charuco_pose_one_frame(frame, board, dictionary, t_boardcv_to_target)
+                if est is not None:
+                    samples.append(est)
+                time.sleep(0.05)
+
+            if len(samples) < self._CHARUCO_MIN_VALID_FRAMES:
+                raise RuntimeError(
+                    f"insufficient valid frames: {len(samples)}/{self._CHARUCO_TARGET_FRAMES}, "
+                    f"need >= {self._CHARUCO_MIN_VALID_FRAMES}"
+                )
+
+            t_stack = np.asarray([s["t"] for s in samples], dtype=np.float64)
+            reproj = np.asarray([s["rmse"] for s in samples], dtype=np.float64)
+            median_reproj = float(np.median(reproj))
+            if median_reproj > self._CHARUCO_MAX_MEDIAN_REPROJ_PX:
+                raise RuntimeError(
+                    f"reprojection too high: median {median_reproj:.3f}px > "
+                    f"{self._CHARUCO_MAX_MEDIAN_REPROJ_PX:.3f}px"
+                )
+
+            t_med = np.median(t_stack, axis=0)
+            pos_std = float(np.linalg.norm(np.std(t_stack, axis=0)))
+            if pos_std > self._CHARUCO_MAX_POS_STD_M:
+                raise RuntimeError(
+                    f"translation spread too large: {pos_std * 1000.0:.1f}mm > "
+                    f"{self._CHARUCO_MAX_POS_STD_M * 1000.0:.1f}mm"
+                )
+
+            r_avg = self._quaternion_average([s["r"] for s in samples])
+            rot_diffs = [self._rotation_angle_deg(r_avg, s["r"]) for s in samples]
+            rot_std = float(np.std(np.asarray(rot_diffs, dtype=np.float64)))
+            if rot_std > self._CHARUCO_MAX_ROT_STD_DEG:
+                raise RuntimeError(
+                    f"rotation spread too large: {rot_std:.2f}deg > {self._CHARUCO_MAX_ROT_STD_DEG:.2f}deg"
+                )
+
+            t_arm_to_cam = np.eye(4, dtype=np.float64)
+            t_arm_to_cam[:3, :3] = r_avg
+            t_arm_to_cam[:3, 3] = t_med
+
+            info = {
+                "valid_frames": len(samples),
+                "median_reproj": median_reproj,
+                "pos_std_m": pos_std,
+                "rot_std_deg": rot_std,
+                "corners": int(np.median(np.asarray([s["num_corners"] for s in samples], dtype=np.float64))),
+            }
+            self.root.after(0, lambda: self._on_calibration_done(t_arm_to_cam, info, None))
+        except Exception as exc:
+            self.root.after(0, lambda: self._on_calibration_done(None, None, exc))
+
+    def _on_calibration_done(self, t_arm_to_cam: np.ndarray | None, info: dict | None, err: Exception | None) -> None:
+        self._calibrating = False
+        self._calib_btn_text.set("Calibration")
+
+        if err is not None:
+            self._status.set(f"Calibration failed: {err}")
+            return
+
+        self._ctrl_t_arm_to_cam = np.asarray(t_arm_to_cam, dtype=np.float64)
+        self._apply_ctrl_pose_to_ui()
+        self._status.set(
+            "Calibration done: "
+            f"valid={info['valid_frames']}/{self._CHARUCO_TARGET_FRAMES}, "
+            f"corners~{info['corners']}, "
+            f"reproj={info['median_reproj']:.3f}px"
+        )
+
     def _build_ui(self) -> None:
         self.root.title("Phase 7 - Arm ICP GUI")
         self.root.configure(bg=DARK_BG)
@@ -375,6 +661,7 @@ class Phase7ArmIcpGUI:
         tk.Button(top, text="Stop", command=self.stop, **BTN_DANGER).pack(side="left", padx=4)
         tk.Button(top, textvariable=self._viewer_btn_text, command=self.toggle_viewer, **BTN_ACCENT).pack(side="left", padx=4)
         tk.Button(top, text="Save Snapshot", command=self.save_snapshot, **BTN_ACCENT).pack(side="left", padx=4)
+        tk.Button(top, textvariable=self._calib_btn_text, command=self.on_calibration, **BTN_ACCENT).pack(side="left", padx=4)
         tk.Button(top, textvariable=self._solve_btn_text, command=self.on_cpi_solve, **BTN_ACCENT).pack(side="left", padx=10)
 
         tk.Label(top, textvariable=self._status, bg=DARK_BG, fg="#dddddd", font=("Helvetica", 11)).pack(side="left", padx=12)
@@ -400,7 +687,7 @@ class Phase7ArmIcpGUI:
         self.depth_canvas = tk.Canvas(right, bg="#111111", highlightthickness=0)
         self.depth_canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        hint = "Virtual arm overlay uses arm.T_cam2arm from settings.yaml. Click cpi solve to run ICP."
+        hint = "Calibration initializes arm frame from Charuco; Save writes current pose as arm.T_cam2arm."
         tk.Label(self.root, text=hint, bg=DARK_BG, fg="#9c9c9c", font=("Helvetica", 10)).pack(pady=(0, 8))
 
         # Manual adjustment controls
@@ -409,33 +696,45 @@ class Phase7ArmIcpGUI:
 
         tk.Label(controls, text="Manual Arm Pose Adjustment", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 12, "bold")).pack(pady=(0, 8))
 
-        # Translation sliders
+        # Translation inputs
         trans_frame = tk.Frame(controls, bg=DARK_BG)
         trans_frame.pack(fill="x", pady=(0, 8))
         tk.Label(trans_frame, text="Translation (m):", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 11)).pack(side="left", padx=(0, 10))
 
         tk.Label(trans_frame, text="Tx", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(trans_frame, from_=-2.0, to=2.0, resolution=0.01, orient="horizontal", variable=self._tx_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        tx_entry = tk.Entry(trans_frame, textvariable=self._tx_var, width=8, font=("Helvetica", 10))
+        tx_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(tx_entry, self._tx_var, step=0.01)
 
         tk.Label(trans_frame, text="Ty", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(trans_frame, from_=-2.0, to=2.0, resolution=0.01, orient="horizontal", variable=self._ty_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        ty_entry = tk.Entry(trans_frame, textvariable=self._ty_var, width=8, font=("Helvetica", 10))
+        ty_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(ty_entry, self._ty_var, step=0.01)
 
         tk.Label(trans_frame, text="Tz", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(trans_frame, from_=-2.0, to=2.0, resolution=0.01, orient="horizontal", variable=self._tz_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        tz_entry = tk.Entry(trans_frame, textvariable=self._tz_var, width=8, font=("Helvetica", 10))
+        tz_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(tz_entry, self._tz_var, step=0.01)
 
-        # Rotation sliders
+        # Rotation inputs
         rot_frame = tk.Frame(controls, bg=DARK_BG)
         rot_frame.pack(fill="x", pady=(0, 8))
         tk.Label(rot_frame, text="Rotation (deg):", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 11)).pack(side="left", padx=(0, 10))
 
         tk.Label(rot_frame, text="Rx", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(rot_frame, from_=-180.0, to=180.0, resolution=1.0, orient="horizontal", variable=self._rx_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        rx_entry = tk.Entry(rot_frame, textvariable=self._rx_var, width=8, font=("Helvetica", 10))
+        rx_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(rx_entry, self._rx_var, step=0.5)
 
         tk.Label(rot_frame, text="Ry", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(rot_frame, from_=-180.0, to=180.0, resolution=1.0, orient="horizontal", variable=self._ry_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        ry_entry = tk.Entry(rot_frame, textvariable=self._ry_var, width=8, font=("Helvetica", 10))
+        ry_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(ry_entry, self._ry_var, step=0.5)
 
         tk.Label(rot_frame, text="Rz", bg=DARK_BG, fg="#ffffff", font=("Helvetica", 10)).pack(side="left", padx=(0, 5))
-        tk.Scale(rot_frame, from_=-180.0, to=180.0, resolution=1.0, orient="horizontal", variable=self._rz_var, command=self._on_slider_change, bg=DARK_BG, fg="#ffffff", highlightthickness=0).pack(side="left", padx=(0, 10))
+        rz_entry = tk.Entry(rot_frame, textvariable=self._rz_var, width=8, font=("Helvetica", 10))
+        rz_entry.pack(side="left", padx=(0, 10))
+        self._bind_pose_entry(rz_entry, self._rz_var, step=0.5)
 
         tk.Button(controls, text="Save", command=self._save_current_pose, bg="#2d7f2d", fg="#ffffff", font=("Helvetica", 11, "bold"), relief="raised", bd=2, padx=12, pady=6).pack(side="right", padx=(10, 0))
         tk.Button(controls, text="Apply Pose", command=self._commit_ctrl_pose, **BTN_ACCENT).pack(side="right", padx=(10, 0))
@@ -443,21 +742,43 @@ class Phase7ArmIcpGUI:
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _bind_pose_entry(self, entry: tk.Entry, var: tk.DoubleVar, step: float) -> None:
+        """Bind entry interactions for live update and keyboard nudging."""
+        entry.bind("<KeyRelease>", self._on_slider_change)
+        entry.bind("<FocusOut>", self._on_slider_change)
+        entry.bind("<Return>", self._on_slider_change)
+        entry.bind("<Up>", lambda e, v=var, s=step: self._nudge_pose_var(v, +s))
+        entry.bind("<Down>", lambda e, v=var, s=step: self._nudge_pose_var(v, -s))
+
+    def _nudge_pose_var(self, var: tk.DoubleVar, delta: float) -> str:
+        """Nudge one pose value by fixed step and refresh pose immediately."""
+        try:
+            current = float(var.get())
+        except tk.TclError:
+            current = 0.0
+        var.set(round(current + float(delta), 6))
+        self._on_slider_change()
+        return "break"
+
     def _on_slider_change(self, _event=None) -> None:
         if self._syncing_sliders:
             return
 
-        tx = self._tx_var.get()
-        ty = self._ty_var.get()
-        tz = self._tz_var.get()
-        rx = self._rx_var.get()
-        ry = self._ry_var.get()
-        rz = self._rz_var.get()
+        try:
+            tx = self._tx_var.get()
+            ty = self._ty_var.get()
+            tz = self._tz_var.get()
+            rx = self._rx_var.get()
+            ry = self._ry_var.get()
+            rz = self._rz_var.get()
+        except tk.TclError:
+            self._status.set("Invalid pose input: please enter numeric values")
+            return
 
-        # Build rotation matrix from slider Euler (degrees)
+        # Build rotation matrix from input Euler (degrees)
         r = euler_xyz_deg_to_matrix(rx, ry, rz)
 
-        # Translation sliders are applied as local-axis increments so motion follows
+        # Translation inputs are applied as local-axis increments so motion follows
         # the currently rotated arm frame (not fixed camera world axes).
         d_local = np.array(
             [tx - self._prev_tx, ty - self._prev_ty, tz - self._prev_tz],
@@ -495,7 +816,7 @@ class Phase7ArmIcpGUI:
             self._status.set("Pose applied")
 
     def _reset_to_settings(self) -> None:
-        """Reset sliders to values from settings.yaml."""
+        """Reset pose inputs to values from settings.yaml."""
         # Load config from settings file
         settings_path = self.settings_path
         if not os.path.isabs(settings_path):
@@ -508,21 +829,7 @@ class Phase7ArmIcpGUI:
         self._t_cam_to_arm = t_cam_to_arm
         self._t_arm_to_cam = np.linalg.inv(t_cam_to_arm)
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
-
-        self._syncing_sliders = True
-        self._tx_var.set(float(self._ctrl_t_arm_to_cam[0, 3]))
-        self._ty_var.set(float(self._ctrl_t_arm_to_cam[1, 3]))
-        self._tz_var.set(float(self._ctrl_t_arm_to_cam[2, 3]))
-        rx, ry, rz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
-        self._rx_var.set(rx)
-        self._ry_var.set(ry)
-        self._rz_var.set(rz)
-        self._syncing_sliders = False
-
-        self._prev_tx = self._tx_var.get()
-        self._prev_ty = self._ty_var.get()
-        self._prev_tz = self._tz_var.get()
-        self.viewer.set_t_arm_to_cam(self._ctrl_t_arm_to_cam)
+        self._apply_ctrl_pose_to_ui()
 
     def start(self) -> None:
         if self._running:
@@ -776,14 +1083,7 @@ class Phase7ArmIcpGUI:
         self._t_cam_to_arm = np.asarray(result.t_cam_to_arm, dtype=np.float64)
         self._t_arm_to_cam = np.asarray(result.t_arm_to_cam, dtype=np.float64)
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
-
-        self._tx_var.set(float(self._ctrl_t_arm_to_cam[0, 3]))
-        self._ty_var.set(float(self._ctrl_t_arm_to_cam[1, 3]))
-        self._tz_var.set(float(self._ctrl_t_arm_to_cam[2, 3]))
-        rx, ry, rz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
-        self._rx_var.set(rx)
-        self._ry_var.set(ry)
-        self._rz_var.set(rz)
+        self._apply_ctrl_pose_to_ui()
 
         if self._viewer_enabled and self._latest_points is not None and self._latest_points.shape[0] > 0:
             self.viewer.update(self._latest_points, self._latest_colors, self._ctrl_t_arm_to_cam)
