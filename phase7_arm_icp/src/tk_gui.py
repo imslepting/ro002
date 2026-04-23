@@ -327,6 +327,9 @@ class Phase7ArmIcpGUI:
         self._prev_tx = 0.0
         self._prev_ty = 0.0
         self._prev_tz = 0.0
+        self._prev_rx = 0.0
+        self._prev_ry = 0.0
+        self._prev_rz = 0.0
         self._syncing_sliders = False
 
         self._photo_rgb = None
@@ -384,6 +387,9 @@ class Phase7ArmIcpGUI:
         self._prev_tx = self._tx_var.get()
         self._prev_ty = self._ty_var.get()
         self._prev_tz = self._tz_var.get()
+        self._prev_rx = self._rx_var.get()
+        self._prev_ry = self._ry_var.get()
+        self._prev_rz = self._rz_var.get()
         self.viewer.set_t_arm_to_cam(self._ctrl_t_arm_to_cam)
 
     @staticmethod
@@ -783,8 +789,11 @@ class Phase7ArmIcpGUI:
             self._status.set("Invalid pose input: please enter numeric values")
             return
 
-        # Build rotation matrix from input Euler (degrees)
-        r = euler_xyz_deg_to_matrix(rx, ry, rz)
+        # Calculate rotation delta (local)
+        drx = rx - self._prev_rx
+        dry = ry - self._prev_ry
+        drz = rz - self._prev_rz
+        r_delta = euler_xyz_deg_to_matrix(drx, dry, drz)
 
         # Translation inputs are applied as local-axis increments so motion follows
         # the currently rotated arm frame (not fixed camera world axes).
@@ -797,11 +806,28 @@ class Phase7ArmIcpGUI:
         self._prev_tz = tz
 
         T_arm_to_cam = self._ctrl_t_arm_to_cam.copy()
-        T_arm_to_cam[:3, :3] = r
-        T_arm_to_cam[:3, 3] = T_arm_to_cam[:3, 3] + (r @ d_local)
+        current_r = T_arm_to_cam[:3, :3]
+
+        # Apply local rotation: new_R = current_R @ r_delta
+        T_arm_to_cam[:3, :3] = current_r @ r_delta
+        # Apply translation locally
+        T_arm_to_cam[:3, 3] = T_arm_to_cam[:3, 3] + (current_r @ d_local)
 
         # Control pose only: do not overwrite committed calibration until user applies.
         self._ctrl_t_arm_to_cam = T_arm_to_cam
+
+        # Re-compute absolute Euler angles and update UI
+        new_rx, new_ry, new_rz = _matrix_to_euler_xyz_deg(self._ctrl_t_arm_to_cam)
+
+        self._syncing_sliders = True
+        self._rx_var.set(round(new_rx, 6))
+        self._ry_var.set(round(new_ry, 6))
+        self._rz_var.set(round(new_rz, 6))
+        self._syncing_sliders = False
+
+        self._prev_rx = self._rx_var.get()
+        self._prev_ry = self._ry_var.get()
+        self._prev_rz = self._rz_var.get()
 
         # Update viewer (viewer expects arm->cam)
         self.viewer.set_t_arm_to_cam(self._ctrl_t_arm_to_cam)
