@@ -15,12 +15,13 @@ if _ROOT not in sys.path:
 from phase7_arm_icp.src.tk_gui import run_phase7_arm_icp_gui
 
 
-def load_config(config_path: str) -> dict:
+def load_config(config_path: str) -> tuple[dict, str]:
+    """Loads config from path and returns the config dict and its absolute path."""
     path = config_path
     if not os.path.isabs(path):
         path = os.path.join(_ROOT, path)
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        return yaml.safe_load(f), path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,12 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    cfg = load_config(args.config)
-
-    settings_path = args.config
-    if not os.path.isabs(settings_path):
-        settings_path = os.path.join(_ROOT, settings_path)
-
+    cfg, settings_path = load_config(args.config)
+    
     run_phase7_arm_icp_gui(cfg=cfg, root_dir=_ROOT, settings_path=settings_path)
 
 

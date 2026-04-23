@@ -480,13 +480,21 @@ class Phase7ArmIcpGUI:
 
         t = np.eye(4, dtype=np.float64)
         if span_x >= span_y:
-            r = np.eye(3, dtype=np.float64)
+            # Apply 180-degree rotation around X-axis (Y becomes -Y, Z becomes -Z)
+            r = np.array(
+                [
+                    [1.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                ],
+                dtype=np.float64,
+            )
         else:
             r = np.array(
                 [
                     [0.0, 1.0, 0.0],
-                    [-1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, -1.0],
                 ],
                 dtype=np.float64,
             )
@@ -1104,16 +1112,19 @@ def _matrix_to_euler_xyz_deg(mat: np.ndarray) -> tuple[float, float, float]:
     # Assumes mat is 4x4 transformation matrix, returns intrinsic XYZ Euler in degrees
     r = mat[:3, :3]
     # Prevent numerical issues
-    sy = -r[0, 2]
+    sy = r[0, 2]
     ay = np.arcsin(np.clip(sy, -1.0, 1.0))
     cy = np.cos(ay)
     if abs(cy) > 1e-6:
-        ax = np.arctan2(r[1, 2], r[2, 2])
-        az = np.arctan2(r[0, 1], r[0, 0])
+        ax = np.arctan2(-r[1, 2], r[2, 2])
+        az = np.arctan2(-r[0, 1], r[0, 0])
     else:
         # Gimbal lock
-        ax = np.arctan2(-r[2, 1], r[1, 1])
         az = 0.0
+        if sy > 0:
+            ax = np.arctan2(r[1, 0], r[1, 1])
+        else:
+            ax = np.arctan2(-r[1, 0], r[1, 1])
     return tuple(np.rad2deg([ax, ay, az]))
 
 
