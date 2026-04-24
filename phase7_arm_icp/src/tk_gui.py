@@ -313,9 +313,12 @@ class Phase7ArmIcpGUI:
         self._status = tk.StringVar(value="Idle")
         self._metrics = tk.StringVar(value="FPS: 0.0 | Latency: 0 ms | Points: 0 | ValidDepth: 0.0%")
         self._icp_metrics = tk.StringVar(value="ICP: not solved")
+        self._pick_info = tk.StringVar(value="")
         self._viewer_btn_text = tk.StringVar(value="Open Point Cloud")
         self._solve_btn_text = tk.StringVar(value="cpi solve")
         self._calib_btn_text = tk.StringVar(value="Calibration")
+        self._test_calib_btn_text = tk.StringVar(value="Test Calibration")
+        self._test_calib_enabled = False
 
         # Manual adjustment sliders
         self._tx_var = tk.DoubleVar()
@@ -676,12 +679,16 @@ class Phase7ArmIcpGUI:
         tk.Button(top, textvariable=self._viewer_btn_text, command=self.toggle_viewer, **BTN_ACCENT).pack(side="left", padx=4)
         tk.Button(top, text="Save Snapshot", command=self.save_snapshot, **BTN_ACCENT).pack(side="left", padx=4)
         tk.Button(top, textvariable=self._calib_btn_text, command=self.on_calibration, **BTN_ACCENT).pack(side="left", padx=4)
+        tk.Button(top, textvariable=self._test_calib_btn_text, command=self.toggle_test_calibration, **BTN_ACCENT).pack(side="left", padx=4)
         tk.Button(top, textvariable=self._solve_btn_text, command=self.on_cpi_solve, **BTN_ACCENT).pack(side="left", padx=10)
 
         tk.Label(top, textvariable=self._status, bg=DARK_BG, fg="#dddddd", font=("Helvetica", 11)).pack(side="left", padx=12)
         tk.Label(top, textvariable=self._metrics, bg=DARK_BG, fg="#8fd18f", font=("Helvetica", 10)).pack(side="left", padx=10)
 
         tk.Label(self.root, textvariable=self._icp_metrics, bg=DARK_BG, fg="#f5c06a", font=("Helvetica", 11)).pack(
+            fill="x", padx=14, pady=(0, 4)
+        )
+        tk.Label(self.root, textvariable=self._pick_info, bg=DARK_BG, fg="#00FFFF", font=("Helvetica", 11)).pack(
             fill="x", padx=14, pady=(0, 8)
         )
 
@@ -696,10 +703,12 @@ class Phase7ArmIcpGUI:
         tk.Label(left, text="Color", bg="#262626", fg="#ffffff", font=("Helvetica", 12, "bold")).pack(pady=6)
         self.rgb_canvas = tk.Canvas(left, bg="#111111", highlightthickness=0)
         self.rgb_canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.rgb_canvas.bind("<Button-1>", self.on_canvas_click)
 
         tk.Label(right, text="Depth", bg="#262626", fg="#ffffff", font=("Helvetica", 12, "bold")).pack(pady=6)
         self.depth_canvas = tk.Canvas(right, bg="#111111", highlightthickness=0)
         self.depth_canvas.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.depth_canvas.bind("<Button-1>", self.on_canvas_click)
 
         hint = "Calibration initializes arm frame from Charuco; Save writes current pose as arm.T_cam2arm."
         tk.Label(self.root, text=hint, bg=DARK_BG, fg="#9c9c9c", font=("Helvetica", 10)).pack(pady=(0, 8))
@@ -865,6 +874,76 @@ class Phase7ArmIcpGUI:
         self._ctrl_t_arm_to_cam = self._t_arm_to_cam.copy()
         self._apply_ctrl_pose_to_ui()
 
+    def toggle_test_calibration(self) -> None:
+        self._test_calib_enabled = not getattr(self, "_test_calib_enabled", False)
+        if self._test_calib_enabled:
+            self._test_calib_btn_text.set("Stop Test Calib")
+            self._status.set("Test Calibration Mode: Frozen. Click on Color/Depth image.")
+            self._pick_info.set("Click anywhere on the image to see coordinates.")
+        else:
+            self._test_calib_btn_text.set("Test Calibration")
+            self._status.set("Live")
+            self._pick_info.set("")
+
+    def on_canvas_click(self, event) -> None:
+        if not getattr(self, "_test_calib_enabled", False):
+            return
+            
+        canvas = event.widget
+        cw = canvas.winfo_width()
+        ch = canvas.winfo_height()
+        
+        if self._latest_color is None or self._latest_depth is None:
+            return
+            
+        h, w = self._latest_color.shape[:2]
+        s = min(cw / w, ch / h)
+        nw, nh = max(1, int(w * s)), max(1, int(h * s))
+        
+        x0 = (cw - nw) // 2
+        y0 = (ch - nh) // 2
+        
+        click_x = event.x - x0
+        click_y = event.y - y0
+        
+        if click_x < 0 or click_x >= nw or click_y < 0 or click_y >= nh:
+            return
+            
+        img_x = int(click_x / s)
+        img_y = int(click_y / s)
+        
+        if img_x < 0 or img_x >= w or img_y < 0 or img_y >= h:
+            return
+            
+        depth_val = self._latest_depth[img_y, img_x]
+        if depth_val <= 0:
+            self._pick_info.set(f"Picked ({img_x}, {img_y}): Invalid Depth")
+            return
+            
+        intr = self.provider.intrinsics
+        Z = float(depth_val)
+        X = (img_x - intr.cx) * Z / intr.fx
+        Y = (img_y - intr.cy) * Z / intr.fy
+        
+        P_cam = np.array([X, Y, Z, 1.0], dtype=np.float64)
+        
+        try:
+            with open(self.settings_path, "r", encoding="utf-8") as f:
+                current_cfg = yaml.safe_load(f)
+            T_cam2arm = _safe_t_cam2arm(current_cfg)
+        except Exception:
+            T_cam2arm = self._t_cam_to_arm
+            
+        P_arm = T_cam2arm @ P_cam
+        
+        info_str = (
+            f"Pix: ({img_x}, {img_y}) | "
+            f"Cam: ({X:.4f}, {Y:.4f}, {Z:.4f}) | "
+            f"Arm: ({P_arm[0]:.4f}, {P_arm[1]:.4f}, {P_arm[2]:.4f})"
+        )
+        self._pick_info.set(info_str)
+        print(f"[Test Calib] {info_str}")
+
     def start(self) -> None:
         if self._running:
             return
@@ -882,6 +961,8 @@ class Phase7ArmIcpGUI:
 
     def stop(self) -> None:
         self._running = False
+        self._test_calib_enabled = False
+        self._test_calib_btn_text.set("Test Calibration")
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=2.0)
             self._loop_thread = None
@@ -924,6 +1005,10 @@ class Phase7ArmIcpGUI:
                 color, depth = self.provider.get_frames(timeout_ms=1000)
             except Exception:
                 time.sleep(0.05)
+                continue
+
+            if getattr(self, "_test_calib_enabled", False):
+                time.sleep(0.01)
                 continue
 
             valid_depth = depth > 0
@@ -1024,7 +1109,9 @@ class Phase7ArmIcpGUI:
             f"Points: {pts} | ValidDepth: {valid_ratio*100:.1f}%"
         )
 
-        if self._running and pts == 0:
+        if getattr(self, "_test_calib_enabled", False):
+            pass
+        elif self._running and pts == 0:
             self._status.set("Live (no valid points in current depth range)")
         elif self._running and self._viewer_enabled and self._last_fallback:
             self._status.set("Live + 3D (auto depth-range fallback)")
