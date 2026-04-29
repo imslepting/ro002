@@ -237,7 +237,7 @@ class ToolExecutor:
             pos = result.pose_arm[:3, 3]
             text = (
                 f"抓取計算完成：score={result.grasp_score:.3f}，"
-                f"夾爪寬度={result.grasp_width*1000:.1f}mm，"
+                # f"夾爪寬度={result.grasp_width*1000:.1f}mm，"
                 f"位置(arm)=[{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]，"
                 f"候選數={result.num_candidates}，"
                 f"點雲大小={result.cropped_cloud_size}。"
@@ -280,7 +280,7 @@ class ToolExecutor:
                 session_dir=self._session_dir,
             )
 
-            text = f"計劃已保存到 {plan_path}"
+            text = f"計劃已保存"
         else:
             text = "計劃已生成（PlanSerializer 未配置，未存檔）"
 

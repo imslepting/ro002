@@ -263,6 +263,7 @@ class CapturePointSkill:
             num_candidates=n_candidates,
             annotated_image=annotated,
             cropped_cloud_size=len(points_arm),
+            contact_point_arm=contact_arm,
         )
 
     def _apply_collision_filter(

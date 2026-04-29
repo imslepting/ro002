@@ -330,7 +330,7 @@ class VLMAgentGUI:
         self._conv_text = tk.Text(
             conv_frame, wrap=tk.WORD, state=tk.DISABLED,
             bg="#1e1e1e", fg="#d4d4d4", insertbackground="#d4d4d4",
-            font=("Consolas", 10), relief=tk.FLAT,
+            font=("Microsoft JhengHei", 18), relief=tk.FLAT, #TODO:這裡調整字體大小
             selectbackground="#264f78",
             width=60, height=20,
         )
@@ -790,27 +790,8 @@ class VLMAgentGUI:
                     text = block["text"].strip()
                     if text:
                         self._append_conv(f"[Agent] {text}\n", "agent")
-                elif block.get("type") == "tool_use":
-                    name = block["name"]
-                    inp = block.get("input", {})
-                    inp_str = ", ".join(f'{k}="{v}"' for k, v in inp.items())
-                    self._append_conv(
-                        f"  -> [{name}({inp_str})]\n", "tool_call",
-                    )
 
         elif turn.role == "tool_result":
-            for block in turn.content:
-                if block.get("type") == "tool_result":
-                    for sub in block.get("content", []):
-                        if sub.get("type") == "text":
-                            self._append_conv(
-                                f"  <- {sub['text']}\n", "tool_result",
-                            )
-                        elif sub.get("type") == "image":
-                            self._append_conv(
-                                "  <- [圖片結果]\n", "tool_result",
-                            )
-
             # 檢查 executor 狀態，更新 segment/grasp canvas
             if hasattr(self, "_agent_executor") and self._agent_executor:
                 sam3 = self._agent_executor.sam3_result
@@ -1339,16 +1320,18 @@ class VLMAgentGUI:
             self._set_stage("PLAN_READY")
             self._status_var.set("Agent completed")
 
-            # 更新 summary
+            # TODO:更新 summary
             parts = [f"Task: {result.task_text}"]
             if result.capture_result and result.capture_result.num_candidates > 0:
                 cr = result.capture_result
-                pos = cr.pose_arm[:3, 3]
+                contact = cr.contact_point_arm
+                if contact is None:
+                    contact = cr.pose_arm[:3, 3]
                 parts.append(
                     f"Score: {cr.grasp_score:.3f}  Width: {cr.grasp_width*1000:.1f}mm"
                 )
                 parts.append(
-                    f"Pos(arm): [{pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}]"
+                    f"Pos(target): [{contact[0]:.3f}, {contact[1]:.3f}, {contact[2]:.3f}]"
                 )
             parts.append(f"Tokens: {result.total_tokens:,}")
             if result.session_dir:

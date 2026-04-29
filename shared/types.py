@@ -127,3 +127,4 @@ class CapturePointResult:
     num_candidates: int               # 候選抓取總數
     annotated_image: np.ndarray       # 標注後的圖像 BGR uint8
     cropped_cloud_size: int           # 裁剪後點雲大小（debug 用）
+    contact_point_arm: np.ndarray | None = None  # 物體表面接觸點（arm 座標系）
